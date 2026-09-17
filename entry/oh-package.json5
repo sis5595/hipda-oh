@@ -1,0 +1,9 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "HiPDA\u00b7OH HarmonyOS 6 application module.",
+  "main": "",
+  "author": "sis5595",
+  "license": "GPL-3.0-or-later",
+  "dependencies": {}
+}

@@ -1,0 +1,27 @@
+# DevEco Studio / Hvigor generated files
+.hvigor/
+/build/
+/entry/build/
+/oh_modules/
+/local.properties
+/.idea/
+*.log
+*.hap
+*.app
+
+# Local signing material. Keep the real build-profile.json5 on this machine only.
+/build-profile.json5
+*.p12
+*.p7b
+*.cer
+*.jks
+*.keystore
+
+# Local reference code and original icon working files are not product source.
+/references/
+/background.png
+/foreground.png
+
+# OS/editor leftovers
+.DS_Store
+Thumbs.db

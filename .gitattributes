@@ -1,0 +1,10 @@
+# Keep source and project metadata stable across Windows and non-Windows tools.
+*.ets text eol=lf
+*.ts text eol=lf
+*.json text eol=lf
+*.json5 text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.svg text eol=lf
+*.png binary
+*.hap binary
