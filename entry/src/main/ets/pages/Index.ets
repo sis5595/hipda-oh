@@ -1,4 +1,5 @@
 import { HomePage } from '../presentation/home/HomePage';
+import { common } from '@kit.AbilityKit';
 import { ForumComposerPage } from '../presentation/composer/ForumComposerPage';
 import { FavoritesPage } from '../presentation/favorite/FavoritesPage';
 import { AttentionPage } from '../presentation/attention/AttentionPage';
@@ -11,6 +12,7 @@ import { ThreadDetailPage } from '../presentation/thread/ThreadDetailPage';
 import { UserProfilePage } from '../presentation/profile/UserProfilePage';
 import { BlacklistPage } from '../presentation/blacklist/BlacklistPage';
 import { SettingsPage } from '../presentation/settings/SettingsPage';
+import { PrivacyPolicyPage } from '../presentation/privacy/PrivacyPolicyPage';
 import { ReadingHistoryPage } from '../presentation/history/ReadingHistoryPage';
 import { WebContentPage } from '../presentation/web/WebContentPage';
 import { AccountPage } from '../presentation/account/AccountPage';
@@ -23,6 +25,8 @@ import { FourD4yBlacklistState } from '../domain/blacklist/FourD4yBlacklistState
 import { FourD4yReadHistoryState } from '../domain/history/FourD4yReadHistoryState';
 import { FourD4yAccountState } from '../domain/account/FourD4yAccountState';
 import { FourD4yUnreadState } from '../domain/notice/FourD4yUnreadState';
+import { FourD4yPrivacyConsentStore } from '../data/local/FourD4yPrivacyConsentStore';
+import { FOUR_D4Y_PRIVACY_POLICY_SECTIONS, FourD4yPrivacyPolicySection } from '../domain/privacy/FourD4yPrivacyPolicy';
 
 @Entry
 @Component
@@ -37,6 +41,15 @@ struct Index {
   @Provide('readHistoryState') readHistoryState: FourD4yReadHistoryState = new FourD4yReadHistoryState();
   @Provide('accountState') accountState: FourD4yAccountState = new FourD4yAccountState();
   @Provide('unreadState') unreadState: FourD4yUnreadState = new FourD4yUnreadState();
+  @StorageLink('hipdaoh_privacy_accepted') privacyAccepted: boolean = false;
+  @State privacyReady: boolean = false;
+  @State isAcceptingPrivacyPolicy: boolean = false;
+  @State privacyErrorMessage: string = '';
+  @State isPolicyDetailVisible: boolean = false;
+
+  aboutToAppear(): void {
+    void this.loadPrivacyConsent();
+  }
 
   @Builder
   private routeMap(routeName: string) {
@@ -68,6 +81,8 @@ struct Index {
       PrivateMessageDetailPage();
     } else if (routeName === 'Settings') {
       SettingsPage();
+    } else if (routeName === 'PrivacyPolicy') {
+      PrivacyPolicyPage();
     } else if (routeName === 'ReadingHistory') {
       ReadingHistoryPage();
     } else if (routeName === 'Account') {
@@ -76,13 +91,158 @@ struct Index {
   }
 
   build() {
-    Navigation(this.pathStack) {
-      HomePage();
+    if (!this.privacyReady) {
+      this.buildPrivacyLoading();
+    } else if (!this.privacyAccepted) {
+      this.buildPrivacyConsent();
+    } else {
+      Navigation(this.pathStack) {
+        HomePage();
+      }
+      .width('100%')
+      .height('100%')
+      .hideTitleBar(true)
+      .navDestination(this.routeMap)
+    }
+  }
+
+  @Builder
+  private buildPrivacyLoading() {
+    Column({ space: 10 }) {
+      LoadingProgress().width(28).height(28);
+      Text('正在准备应用…')
+        .fontSize(14)
+        .fontColor($r('app.color.text_secondary'));
     }
     .width('100%')
     .height('100%')
-    .hideTitleBar(true)
-    .navDestination(this.routeMap)
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor($r('app.color.canvas'));
+  }
+
+  @Builder
+  private buildPrivacyConsent() {
+    Scroll() {
+      Column({ space: 16 }) {
+        Text('隐私政策')
+          .fontSize(24)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .width('100%');
+        Text('HiPDA·OH 在进入论坛前需要你的同意。应用会按你的操作访问 4D4Y，显示论坛内容；登录并保存帐号时，会将会话快照保存在系统 Asset Store 加密存储中。本地还会保存显示偏好与阅读历史。')
+          .fontSize(15)
+          .fontColor($r('app.color.text_body'))
+          .lineHeight(23)
+          .width('100%');
+        Text('应用不保存论坛密码；不集成广告、统计、推送或帐号 SDK；不申请广泛相册、定位、通讯录、相机、麦克风或通知权限。你主动选择图片并确认上传时，才会经系统 Picker 读取该图片并上传至 4D4Y。')
+          .fontSize(15)
+          .fontColor($r('app.color.text_body'))
+          .lineHeight(23)
+          .width('100%');
+        Text(this.isPolicyDetailVisible ? '收起完整隐私政策' : '阅读完整隐私政策')
+          .fontSize(15)
+          .fontColor($r('app.color.brand'))
+          .width('100%')
+          .onClick(() => {
+            this.isPolicyDetailVisible = !this.isPolicyDetailVisible;
+          });
+        if (this.isPolicyDetailVisible) {
+          Text('开发者：sis5595；联系邮箱：sis5595@hotmail.com；更新日期：2026 年 9 月 20 日。')
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%')
+            .padding(12)
+            .backgroundColor($r('app.color.fill_subtle'));
+          ForEach(FOUR_D4Y_PRIVACY_POLICY_SECTIONS, (section: FourD4yPrivacyPolicySection) => {
+            this.buildPrivacyPolicySection(section);
+          }, (section: FourD4yPrivacyPolicySection) => section.title);
+        }
+        if (this.privacyErrorMessage.length > 0) {
+          Text(this.privacyErrorMessage)
+            .fontSize(13)
+            .fontColor($r('app.color.danger_text'))
+            .width('100%');
+        }
+        Button(this.isAcceptingPrivacyPolicy ? '正在确认…' : '同意并继续')
+          .width('100%')
+          .height(44)
+          .fontSize(16)
+          .fontColor($r('app.color.on_brand'))
+          .backgroundColor($r('app.color.brand'))
+          .enabled(!this.isAcceptingPrivacyPolicy)
+          .onClick(() => {
+            void this.acceptPrivacyPolicy();
+          });
+        Text('暂不同意')
+          .fontSize(14)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+          .textAlign(TextAlign.Center);
+        Text('未同意前，应用不会进入论坛或读取已保存帐号。你可以关闭应用，或稍后再同意。')
+          .fontSize(12)
+          .fontColor($r('app.color.text_muted'))
+          .width('100%')
+          .textAlign(TextAlign.Center);
+      }
+      .width('100%')
+      .padding({ left: 22, right: 22, top: 36, bottom: 28 })
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor($r('app.color.canvas'));
+  }
+
+  @Builder
+  private buildPrivacyPolicySection(section: FourD4yPrivacyPolicySection) {
+    Column({ space: 5 }) {
+      Text(section.title)
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .width('100%');
+      Text(section.content)
+        .fontSize(13)
+        .fontColor($r('app.color.text_body'))
+        .lineHeight(20)
+        .width('100%');
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start);
+  }
+
+  private async loadPrivacyConsent(): Promise<void> {
+    try {
+      const context: common.Context = this.getUIContext().getHostContext() as common.Context;
+      const accepted: boolean = await FourD4yPrivacyConsentStore.hasAcceptedCurrentPolicy(context);
+      AppStorage.setOrCreate<boolean>('hipdaoh_privacy_accepted', accepted);
+      AppStorage.set<boolean>('hipdaoh_privacy_accepted', accepted);
+    } catch (_error) {
+      AppStorage.setOrCreate<boolean>('hipdaoh_privacy_accepted', false);
+      AppStorage.set<boolean>('hipdaoh_privacy_accepted', false);
+    }
+    this.privacyReady = true;
+  }
+
+  private async acceptPrivacyPolicy(): Promise<void> {
+    if (this.isAcceptingPrivacyPolicy) {
+      return;
+    }
+    this.privacyErrorMessage = '';
+    this.isAcceptingPrivacyPolicy = true;
+    try {
+      const context: common.Context = this.getUIContext().getHostContext() as common.Context;
+      const accepted: boolean = await FourD4yPrivacyConsentStore.acceptCurrentPolicy(context);
+      if (!accepted) {
+        this.privacyErrorMessage = '无法保存你的选择，请稍后重试。';
+        this.isAcceptingPrivacyPolicy = false;
+        return;
+      }
+      AppStorage.set<boolean>('hipdaoh_privacy_accepted', true);
+    } catch (_error) {
+      this.privacyErrorMessage = '无法保存你的选择，请稍后重试。';
+    }
+    this.isAcceptingPrivacyPolicy = false;
   }
 
 }

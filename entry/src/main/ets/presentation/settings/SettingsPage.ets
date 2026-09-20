@@ -36,6 +36,8 @@ export struct SettingsPage {
           Divider().color($r('app.color.border'));
           this.buildForumSettingsSection();
           Divider().color($r('app.color.border'));
+          this.buildPrivacySection();
+          Divider().color($r('app.color.border'));
           this.buildQuickForumsSection();
           if (this.statusMessage.length > 0) {
             Text(this.statusMessage)
@@ -204,6 +206,38 @@ export struct SettingsPage {
     .width('100%')
     .padding({ left: 16, right: 16, top: 14, bottom: 14 })
     .backgroundColor($r('app.color.surface'))
+  }
+
+  @Builder
+  private buildPrivacySection() {
+    Column({ space: 8 }) {
+      this.buildSectionTitle('隐私');
+      Row({ space: 10 }) {
+        Column({ space: 3 }) {
+          Text('隐私政策')
+            .fontSize(16)
+            .fontColor($r('app.color.text_primary'))
+            .width('100%');
+          Text('查看数据处理说明、保存期限及控制方式')
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%');
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        Text('›')
+          .fontSize(24)
+          .fontColor($r('app.color.text_muted'));
+      }
+      .width('100%')
+      .height(58)
+      .onClick(() => {
+        this.pathStack.pushPathByName('PrivacyPolicy', null);
+      });
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 14, bottom: 14 })
+    .backgroundColor($r('app.color.surface'));
   }
 
   @Builder

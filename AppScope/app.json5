@@ -1,7 +1,7 @@
 {
   "app": {
     "bundleName": "com.sis5595.hipdaoh",
-    "vendor": "example",
+    "vendor": "sis5595",
     "versionCode": 1000000,
     "versionName": "1.0.0",
     "buildVersion": "1",

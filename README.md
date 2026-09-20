@@ -62,6 +62,6 @@ this repository.
 
 This private development repository does not substitute for a release review.
 The remaining local and AppGallery checks are tracked in
-[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md), including the real
-publisher identity and privacy-policy contact that must be supplied before any
-public distribution.
+[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md), including the
+real-device privacy-consent verification, final region availability check, and
+externally accessible policy URL required before any public distribution.
