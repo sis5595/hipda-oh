@@ -9,6 +9,7 @@
     { "name": "canvas", "value": "#F4F7F8" },
     { "name": "canvas_strong", "value": "#EEF3F5" },
     { "name": "fill_subtle", "value": "#EAF1F4" },
+    { "name": "quote_background", "value": "#F4F4F4" },
     { "name": "page_jump_control", "value": "#DCE8ED" },
     { "name": "fill_selected", "value": "#E1F3F9" },
     { "name": "info_subtle", "value": "#E8F6FB" },

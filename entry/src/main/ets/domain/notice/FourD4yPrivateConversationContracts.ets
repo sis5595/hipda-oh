@@ -10,9 +10,19 @@ export interface FourD4yPrivateConversationMessage {
   senderUserId: string;
   senderName: string;
   body: string;
+  /** Ordered, sanitized inline content. Only 4D4Y forum smilies may be images. */
+  segments?: FourD4yPrivateMessageSegment[];
   occurredAt: string;
   isMine: boolean;
   isUnread: boolean;
+}
+
+export interface FourD4yPrivateMessageSegment {
+  kind: 'text' | 'emoji';
+  /** Visible text or the textual fallback used by copy/search. */
+  value: string;
+  /** Present only for a same-origin `/forum/images/smilies/` resource. */
+  url?: string;
 }
 
 export interface FourD4yPrivateConversationPayload {
@@ -24,6 +34,16 @@ export interface FourD4yPrivateConversationPayload {
   conversationLayoutFound: boolean;
   errorMessage: string;
   messages: FourD4yPrivateConversationMessage[];
+}
+
+/**
+ * NG's PM long-press action copies one message's complete plain-text body.
+ * Sender and timestamp are presentation metadata and must not be mixed into
+ * the clipboard payload.
+ */
+export function buildFourD4yPrivateMessageCopyText(message: FourD4yPrivateConversationMessage): string {
+  const body: string = message.body.trim();
+  return body === '（无文字内容）' ? '' : body;
 }
 
 export enum FourD4yPrivateConversationReaderOutcome {
@@ -95,11 +115,33 @@ function areMessagesValid(messages: FourD4yPrivateConversationMessage[]): boolea
     if (!/^(?:pm|row):\d+$/.test(message.messageId) || identifiers.has(message.messageId) ||
       (message.senderUserId.length > 0 && !isDigitsOnly(message.senderUserId)) ||
       typeof message.senderName !== 'string' || typeof message.body !== 'string' ||
+      (message.segments !== undefined && !areMessageSegmentsValid(message.segments)) ||
       typeof message.occurredAt !== 'string' || typeof message.isMine !== 'boolean' ||
       typeof message.isUnread !== 'boolean') {
       return false;
     }
     identifiers.add(message.messageId);
+  }
+  return true;
+}
+
+function areMessageSegmentsValid(segments: FourD4yPrivateMessageSegment[]): boolean {
+  if (!Array.isArray(segments) || segments.length < 1 || segments.length > 200) {
+    return false;
+  }
+  for (const segment of segments) {
+    if ((segment.kind !== 'text' && segment.kind !== 'emoji') || typeof segment.value !== 'string' ||
+      segment.value.length > 5000) {
+      return false;
+    }
+    if (segment.kind === 'emoji') {
+      if (typeof segment.url !== 'string' ||
+        !/^https:\/\/www\.4d4y\.com\/forum\/images\/smilies\/[A-Za-z0-9_./%-]+$/i.test(segment.url)) {
+        return false;
+      }
+    } else if (segment.url !== undefined) {
+      return false;
+    }
   }
   return true;
 }

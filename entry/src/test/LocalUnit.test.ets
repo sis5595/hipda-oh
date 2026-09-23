@@ -61,7 +61,7 @@ import { parseFourD4yNativeMessagePage, parseFourD4yNativeMessagePrompt } from
   '../main/ets/data/remote/FourD4yMessageNativeParser';
 import { FourD4yUnreadState } from '../main/ets/domain/notice/FourD4yUnreadState';
 import { FourD4yPrivateConversationMessage, FourD4yPrivateConversationReaderOutcome,
-  buildFourD4yPrivateConversationUrl,
+  buildFourD4yPrivateConversationUrl, buildFourD4yPrivateMessageCopyText,
   getFourD4yPrivateConversationReaderOutcome, isAllowedFourD4yPrivateConversationUrl,
   isExpectedFourD4yPrivateConversationPayload } from
   '../main/ets/domain/notice/FourD4yPrivateConversationContracts';
@@ -990,7 +990,11 @@ export default function localUnitTest() {
         '2026-08-24 23:00 <img src="newpm.gif"></p><div class="summary">hello<br>world</div></li>' +
         '<li id="pm_502" class="s_clear"><a class="avatar" href="space.php?uid=5595"><img src="me.png"></a>' +
         '<p class="cite"><cite><a href="space.php?uid=5595">Me</a></cite> 2026-08-24 23:01</p>' +
-        '<div class="summary">reply</div></li></ul>', conversationUrl as string, 35);
+        '<div class="summary">reply</div></li>' +
+        '<li id="pm_503" class="s_clear"><a class="avatar" href="space.php?uid=123"><img src="me.png"></a>' +
+        '<p class="cite"><cite><a href="space.php?uid=123">Alice</a></cite> 2026-08-24 23:02</p>' +
+        '<div class="summary"><img src="images/smilies/default/handshake.gif" alt=""></div></li></ul>',
+        conversationUrl as string, 35);
       expect(payload === null).assertEqual(false);
       if (payload === null) {
         return;
@@ -998,11 +1002,21 @@ export default function localUnitTest() {
       expect(isExpectedFourD4yPrivateConversationPayload(payload, '123', 35)).assertEqual(true);
       expect(getFourD4yPrivateConversationReaderOutcome(payload))
         .assertEqual(FourD4yPrivateConversationReaderOutcome.Content);
-      expect(payload.messages.length).assertEqual(2);
+      expect(payload.messages.length).assertEqual(3);
       expect(payload.messages[0].messageId).assertEqual('pm:501');
       expect(payload.messages[0].body).assertEqual('hello\nworld');
       expect(payload.messages[0].isUnread).assertEqual(true);
       expect(payload.messages[1].isMine).assertEqual(true);
+      expect(buildFourD4yPrivateMessageCopyText(payload.messages[0])).assertEqual('hello\nworld');
+      expect(buildFourD4yPrivateMessageCopyText(payload.messages[0]).indexOf('Alice')).assertEqual(-1);
+      expect(payload.messages[2].body).assertEqual(':handshake:');
+      expect(payload.messages[2].segments === undefined).assertEqual(false);
+      if (payload.messages[2].segments !== undefined) {
+        expect(payload.messages[2].segments.length).assertEqual(1);
+        expect(payload.messages[2].segments[0].kind).assertEqual('emoji');
+        expect(payload.messages[2].segments[0].url)
+          .assertEqual('https://www.4d4y.com/forum/images/smilies/default/handshake.gif');
+      }
     });
 
     it('requires the live NG and MY-style private-message form contract before a send', 0, () => {
@@ -1141,6 +1155,24 @@ export default function localUnitTest() {
         return;
       }
       expect(getThreadReaderOutcome(payload)).assertEqual(FourD4yReaderOutcome.Content);
+    });
+
+    it('preserves structured reply and quote metadata without flattening it into body text', 0, () => {
+      const rawResult: string = '{"threadId":"3460000","viewerUserId":"12345","title":"quote contract","currentPage":1,"lastPage":1,"loadSequence":22,"layout":"legacy-post","postNodeCount":1,"accessState":"available","hasChallenge":false,"errorMessage":"","posts":[{"id":"900032","threadId":"3460000","floor":32,"authorName":"reply-author","publishedAt":"今天 16:52","statusText":"本帖最后由 reply-author 于 今天 16:53 编辑","content":[{"kind":"quote","value":"quoted body","quoteAuthor":"source-author","quoteThreadId":"3460000","quotePostId":"900030","quoteFloor":30},{"kind":"text","value":"own body"}]}]}';
+      const payload = parseThreadWebPayload(rawResult);
+      expect(payload === null).assertEqual(false);
+      if (payload === null) {
+        return;
+      }
+      expect(payload.posts[0].content[0].value).assertEqual('quoted body');
+      expect(payload.posts[0].content[0].quoteAuthor).assertEqual('source-author');
+      expect(payload.posts[0].content[0].quoteFloor).assertEqual(30);
+      expect(payload.posts[0].statusText).assertEqual('本帖最后由 reply-author 于 今天 16:53 编辑');
+    });
+
+    it('rejects malformed structured quote navigation data', 0, () => {
+      const rawResult: string = '{"threadId":"3460000","viewerUserId":"12345","title":"bad quote","currentPage":1,"lastPage":1,"loadSequence":23,"layout":"legacy-post","postNodeCount":1,"accessState":"available","hasChallenge":false,"errorMessage":"","posts":[{"id":"900033","threadId":"3460000","floor":33,"authorName":"author","content":[{"kind":"quote","value":"quoted body","quoteFloor":0}]}]}';
+      expect(parseThreadWebPayload(rawResult) === null).assertEqual(true);
     });
 
     it('preserves a server denial message on a thread page with no posts', 0, () => {

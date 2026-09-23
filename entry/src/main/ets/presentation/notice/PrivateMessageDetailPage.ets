@@ -1,9 +1,12 @@
 import { webview } from '@kit.ArkWeb';
+import { pasteboard } from '@kit.BasicServicesKit';
 import { FourD4yMessageNativeClient, FourD4yNativePrivateConversationResult } from
   '../../data/remote/FourD4yMessageNativeClient';
 import { FourD4ySession } from '../../data/remote/FourD4ySession';
 import { FourD4yPrivateConversationMessage, FourD4yPrivateConversationPayload,
-  FourD4yPrivateConversationReaderOutcome, buildFourD4yPrivateConversationUrl,
+  FourD4yPrivateConversationReaderOutcome, FourD4yPrivateMessageSegment,
+  buildFourD4yPrivateConversationUrl,
+  buildFourD4yPrivateMessageCopyText,
   getFourD4yPrivateConversationReaderOutcome,
   isExpectedFourD4yPrivateConversationPayload } from
   '../../domain/notice/FourD4yPrivateConversationContracts';
@@ -296,17 +299,80 @@ export struct PrivateMessageDetailPage {
           .maxLines(1)
       }
       .width('100%')
-      Text(message.body)
-        .fontSize(16)
-        .fontColor($r('app.color.text_primary'))
-        .lineHeight(23)
-        .width('100%')
+      this.buildMessageBody(message);
     }
     .alignItems(HorizontalAlign.Start)
     .backgroundColor(message.isMine ? $r('app.color.mine_surface') : $r('app.color.canvas'))
     .borderRadius(8)
     .padding({ left: 12, right: 12, top: 9, bottom: 9 })
     .width('100%')
+    .bindContextMenu(this.buildMessageContextMenu(message), ResponseType.LongPress)
+  }
+
+  @Builder
+  private buildMessageBody(message: FourD4yPrivateConversationMessage) {
+    if (message.segments !== undefined && message.segments.length > 0) {
+      Text() {
+        ForEach(message.segments, (segment: FourD4yPrivateMessageSegment, index: number) => {
+          if (segment.kind === 'emoji' && segment.url !== undefined) {
+            ImageSpan(segment.url)
+              .width(23)
+              .height(23)
+              .objectFit(ImageFit.Contain)
+              .verticalAlign(ImageSpanAlignment.CENTER)
+          } else {
+            Span(segment.value)
+          }
+        }, (segment: FourD4yPrivateMessageSegment, index: number) => message.messageId + '-segment-' + index)
+      }
+      .fontSize(16)
+      .fontColor($r('app.color.text_primary'))
+      .lineHeight(23)
+      .width('100%')
+    } else {
+      Text(message.body)
+        .fontSize(16)
+        .fontColor($r('app.color.text_primary'))
+        .lineHeight(23)
+        .width('100%')
+    }
+  }
+
+  @Builder
+  private buildMessageContextMenu(message: FourD4yPrivateConversationMessage) {
+    Menu() {
+      MenuItem({ content: '复制内容' })
+        .enabled(buildFourD4yPrivateMessageCopyText(message).length > 0)
+        .onClick(() => {
+          void this.copyPrivateMessage(message);
+        })
+    }
+  }
+
+  private async copyPrivateMessage(message: FourD4yPrivateConversationMessage): Promise<void> {
+    const content: string = buildFourD4yPrivateMessageCopyText(message);
+    if (content.length === 0) {
+      this.showPrivateMessageToast('私信内容为空');
+      return;
+    }
+    try {
+      const data: pasteboard.PasteData = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, content);
+      const property: pasteboard.PasteDataProperty = data.getProperty();
+      property.tag = 'HiPDA_OH_PRIVATE_MESSAGE_TEXT';
+      data.setProperty(property);
+      await pasteboard.getSystemPasteboard().setData(data);
+      this.showPrivateMessageToast('内容已复制');
+    } catch (_error) {
+      this.showPrivateMessageToast('复制内容失败');
+    }
+  }
+
+  private showPrivateMessageToast(message: string): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      console.warn('Unable to show private-message feedback.');
+    }
   }
 
   private onPrivateMessageWebControllerAttached(): void {

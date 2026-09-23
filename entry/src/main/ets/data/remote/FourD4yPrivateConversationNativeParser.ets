@@ -1,5 +1,6 @@
 import { FourD4yPageAccessState } from '../../domain/reader/FourD4yReaderContracts';
 import { FourD4yPrivateConversationMessage, FourD4yPrivateConversationPayload,
+  FourD4yPrivateMessageSegment,
   isAllowedFourD4yPrivateConversationUrl,
   readFourD4yPrivateConversationParticipantId } from
   '../../domain/notice/FourD4yPrivateConversationContracts';
@@ -66,16 +67,121 @@ function parseConversationMessage(rowHtml: string, viewerUserId: string,
   }
   const sender: FourD4yPrivateConversationSender = extractSender(citeMatch[1], rowHtml);
   const serverId: string = extractMessageId(rowHtml);
-  const body: string = toPlainText(summaryMatch[1]).slice(0, 5000);
+  const content: FourD4yPrivateMessageContent = parsePrivateMessageContent(summaryMatch[1]);
   return {
     messageId: serverId.length > 0 ? 'pm:' + serverId : 'row:' + rowNumber,
     senderUserId: sender.userId,
     senderName: sender.name.length > 0 ? sender.name : '未知用户',
-    body: body.length > 0 ? body : '（无文字内容）',
+    body: content.body.length > 0 ? content.body : '（无文字内容）',
+    segments: content.segments.length > 0 ? content.segments : undefined,
     occurredAt: extractTime(citeMatch[1]),
     isMine: sender.userId.length > 0 && sender.userId === viewerUserId,
     isUnread: /(?:notice_)?newpm\.gif|\bclass=["'][^"']*\bnew\b[^"']*["']|font-weight\s*:\s*bold/i.test(rowHtml)
   };
+}
+
+interface FourD4yPrivateMessageContent {
+  body: string;
+  segments: FourD4yPrivateMessageSegment[];
+}
+
+/**
+ * NG keeps `div.summary` HTML and resolves forum smilie images inline. Keep
+ * the same semantic order, but only retain text plus tightly allow-listed
+ * 4D4Y smilie URLs; arbitrary PM HTML never reaches the native component.
+ */
+function parsePrivateMessageContent(summaryHtml: string): FourD4yPrivateMessageContent {
+  const segments: FourD4yPrivateMessageSegment[] = [];
+  const bodyParts: string[] = [];
+  const imagePattern: RegExp = /<img\b([^>]*)>/gi;
+  let cursor: number = 0;
+  let match: RegExpExecArray | null = imagePattern.exec(summaryHtml);
+  while (match !== null && segments.length < 200) {
+    appendPrivateMessageText(summaryHtml.slice(cursor, match.index), segments, bodyParts);
+    const source: string = extractHtmlAttribute(match[1], 'src');
+    const emojiUrl: string = normalizeFourD4ySmilieUrl(source);
+    if (emojiUrl.length > 0) {
+      const alt: string = toPlainText(extractHtmlAttribute(match[1], 'alt') ||
+        extractHtmlAttribute(match[1], 'title'));
+      const fallback: string = alt.length > 0 ? alt : getFourD4ySmilieFallback(emojiUrl);
+      segments.push({ kind: 'emoji', value: fallback, url: emojiUrl });
+      bodyParts.push(fallback);
+    }
+    cursor = match.index + match[0].length;
+    match = imagePattern.exec(summaryHtml);
+  }
+  appendPrivateMessageText(summaryHtml.slice(cursor), segments, bodyParts);
+  return {
+    body: bodyParts.join('').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 5000),
+    segments: segments
+  };
+}
+
+function appendPrivateMessageText(html: string, segments: FourD4yPrivateMessageSegment[], bodyParts: string[]): void {
+  if (html.length === 0 || segments.length >= 200) {
+    return;
+  }
+  const text: string = toPlainText(html);
+  if (text.length > 0) {
+    segments.push({ kind: 'text', value: text });
+    bodyParts.push(text);
+  }
+}
+
+function extractHtmlAttribute(attributes: string, name: string): string {
+  const pattern: RegExp = new RegExp('\\b' + name + '=["\\\']([^"\\\']*)["\\\']', 'i');
+  const match: RegExpMatchArray | null = attributes.match(pattern);
+  return match === null ? '' : decodeHtml(match[1]).trim();
+}
+
+function normalizeFourD4ySmilieUrl(source: string): string {
+  if (source.length === 0 || source.length > 500) {
+    return '';
+  }
+  let path: string = source.replace(/&amp;/gi, '&').replace(/\\/g, '/').trim();
+  if (/^https?:\/\//i.test(path)) {
+    const absolute: RegExpMatchArray | null = path.match(
+      /^https:\/\/(?:www\.)?4d4y\.com(\/forum\/images\/smilies\/[A-Za-z0-9_./%-]+)(?:[?#].*)?$/i);
+    return absolute === null ? '' : 'https://www.4d4y.com' + absolute[1];
+  }
+  path = path.replace(/^\.\//, '').replace(/^\//, '');
+  if (path.indexOf('forum/images/smilies/') === 0) {
+    return 'https://www.4d4y.com/' + path;
+  }
+  if (path.indexOf('images/smilies/') === 0) {
+    return 'https://www.4d4y.com/forum/' + path;
+  }
+  return '';
+}
+
+function getFourD4ySmilieFallback(url: string): string {
+  const pathMatch: RegExpMatchArray | null = url.match(/\/images\/smilies\/([^?#]+?)(?:\.[A-Za-z0-9]+)$/i);
+  if (pathMatch === null) {
+    return '[表情]';
+  }
+  const key: string = pathMatch[1].replace(/\//g, '_').toLowerCase();
+  const defaultNames: string[] = ['smile', 'sweat', 'huffy', 'cry', 'titter', 'handshake', 'victory', 'curse',
+    'dizzy', 'shutup', 'funk', 'loveliness', 'sad', 'biggrin', 'cool', 'mad', 'shocked', 'tongue', 'lol', 'shy',
+    'sleepy'];
+  const defaultValues: string[] = [':)', ':sweat:', ':huffy:', ':cry:', ':titter:', ':handshake:', ':victory:',
+    ':curse:', ':dizzy:', ':shutup:', ':funk:', ':loveliness:', ':(', ':D', ':cool:', ':mad:', ':o', ':P',
+    ':lol:', ':shy:', ':sleepy:'];
+  for (let index: number = 0; index < defaultNames.length; index += 1) {
+    if (key === 'default_' + defaultNames[index]) {
+      return defaultValues[index];
+    }
+  }
+  const monkey: RegExpMatchArray | null = key.match(/^coolmonkey_(\d{1,2})$/);
+  if (monkey !== null) {
+    const number: number = Number(monkey[1]);
+    return number >= 1 && number <= 16 ? '{:2_' + (40 + number) + ':}' : '[表情]';
+  }
+  const grape: RegExpMatchArray | null = key.match(/^grapeman_(\d{1,2})$/);
+  if (grape !== null) {
+    const number: number = Number(grape[1]);
+    return number >= 1 && number <= 24 ? '{:3_' + (56 + number) + ':}' : '[表情]';
+  }
+  return '[表情]';
 }
 
 interface FourD4yPrivateConversationSender {

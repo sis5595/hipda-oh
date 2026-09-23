@@ -31,6 +31,12 @@ export interface PostContent {
   url?: string;
   /** A directly-renderable attachment preview; `url` remains the full image target. */
   previewUrl?: string;
+  /** Structured 4D4Y quote metadata; never flatten these fields into visible body text. */
+  quoteAuthor?: string;
+  quoteThreadId?: string;
+  quotePostId?: string;
+  quoteFloor?: number;
+  quoteTime?: string;
 }
 
 export interface ThreadPost {
@@ -41,6 +47,8 @@ export interface ThreadPost {
   /** Numeric Discuz uid when the current thread template exposes the author's profile link. */
   authorUserId?: string;
   publishedAt?: string;
+  /** Server-rendered edit/status notice, kept outside the user-authored body. */
+  statusText?: string;
   content: PostContent[];
 }
 

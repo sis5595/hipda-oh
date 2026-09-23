@@ -1117,6 +1117,14 @@ export struct ThreadDetailPage {
         if (post.floor === 1 && this.poll !== undefined) {
           this.buildThreadPoll(this.poll);
         }
+        if (post.statusText !== undefined && post.statusText.length > 0) {
+          Text(post.statusText)
+            .fontSize(12)
+            .fontColor($r('app.color.text_muted'))
+            .textAlign(TextAlign.Center)
+            .width('100%')
+            .margin({ top: 1, bottom: 1 })
+        }
         ForEach(post.content, (content: PostContent, index: number) => {
           this.buildPostContent(content, post.id, index);
         }, (content: PostContent, index: number) => post.id + '-' + index)
@@ -1523,16 +1531,50 @@ export struct ThreadDetailPage {
       }
     } else if (content.kind === 'quote') {
       Column({ space: 6 }) {
+        if (this.hasQuoteHeader(content)) {
+          Row() {
+            if (content.quoteAuthor !== undefined && content.quoteAuthor.length > 0) {
+              Text(content.quoteAuthor)
+                .fontSize(14)
+                .fontColor($r('app.color.brand'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .onClick(() => {
+                  this.openQuotedPost(content);
+                })
+                .monopolizeEvents(true)
+            }
+            Blank()
+            if (content.quoteFloor !== undefined && content.quoteFloor > 0) {
+              Text(content.quoteFloor + '#')
+                .fontSize(14)
+                .fontColor($r('app.color.text_secondary'))
+                .onClick(() => {
+                  this.openQuotedPost(content);
+                })
+                .monopolizeEvents(true)
+            } else if (content.quoteTime !== undefined && content.quoteTime.length > 0) {
+              Text(content.quoteTime)
+                .fontSize(11)
+                .fontColor($r('app.color.text_muted'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+          }
+          .width('100%')
+        }
         Text(content.value)
           .fontSize(15)
           .fontColor($r('app.color.text_detail'))
           .lineHeight(this.getPostLineHeight(23))
+          .maxLines(3)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
           .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
           .width('100%')
       }
       .width('100%')
       .padding({ left: 8, right: 8, top: 8, bottom: 8 })
-      .backgroundColor($r('app.color.fill_subtle'))
+      .backgroundColor($r('app.color.quote_background'))
       .borderRadius(6)
     } else if (content.kind === 'link' || content.kind === 'attachment' || content.kind === 'video') {
       Row({ space: 8 }) {
@@ -1573,6 +1615,23 @@ export struct ThreadDetailPage {
         .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
         .width('100%')
     }
+  }
+
+  private hasQuoteHeader(content: PostContent): boolean {
+    return (content.quoteAuthor !== undefined && content.quoteAuthor.length > 0) ||
+      (content.quoteFloor !== undefined && content.quoteFloor > 0) ||
+      (content.quoteTime !== undefined && content.quoteTime.length > 0);
+  }
+
+  private openQuotedPost(content: PostContent): void {
+    const floor: number = content.quoteFloor === undefined ? 0 : content.quoteFloor;
+    if (floor < 1) {
+      return;
+    }
+    const threadId: string = content.quoteThreadId === undefined || content.quoteThreadId.length === 0 ?
+      this.route.threadId : content.quoteThreadId;
+    const page: number = Math.floor((floor - 1) / 50) + 1;
+    this.openThreadLink(threadId, page, floor, floor + '#');
   }
 
   private getPostLineHeight(baseLineHeight: number): number {
@@ -4768,13 +4827,39 @@ export struct ThreadDetailPage {
       '    const fullUrl = zoomFileUrl || zoomUrl || linkZoomFileUrl || linkZoomUrl || anchorImageUrl || fileUrl || srcUrl;',
       '    return { url: fullUrl, previewUrl: previewUrl };',
       '  };',
-      '  const getQuoteText = (node) => {',
+      '  const getQuoteTarget = (node) => {',
+      '    const link = Array.from(node.querySelectorAll("a[href]")).find((candidate) => isQuoteSourceLink(candidate.getAttribute("href") || ""));',
+      '    if (!link) return { threadId: "", postId: "", floor: 0, author: "" };',
+      '    let url = null; try { url = new URL((link.getAttribute("href") || "").replace(/&amp;/g, "&"), location.href); } catch (_) {}',
+      '    const label = toText(node);',
+      '    const replyMatch = /^\\s*\u56de\u590d\\s*(\\d+)\\s*#\\s*(.*)$/i.exec(label);',
+      '    return {',
+      '      threadId: url ? (url.searchParams.get("ptid") || url.searchParams.get("tid") || "") : "",',
+      '      postId: url ? (url.searchParams.get("pid") || "") : "",',
+      '      floor: replyMatch ? (Number.parseInt(replyMatch[1], 10) || 0) : 0,',
+      '      author: replyMatch ? (replyMatch[2] || "").trim() : ""',
+      '    };',
+      '  };',
+      '  const getQuoteData = (node) => {',
+      '    const target = getQuoteTarget(node);',
       '    const copy = node.cloneNode(true);',
+      '    const attribution = copy.querySelector("font[size=\\\"2\\\"], .quoteauthor, .quote_author");',
+      '    const attributionText = toText(attribution);',
+      '    const attributionMatch = /^(.*?)\\s*\u53d1\u8868\\s*\u4e8e\\s*(.*)$/.exec(attributionText);',
+      '    if (attribution) attribution.remove();',
+      '    Array.from(copy.querySelectorAll("[style*=\\\"display\\\"][style*=\\\"none\\\"]")).forEach((hidden) => hidden.remove());',
       '    Array.from(copy.querySelectorAll("a[href]")).forEach((link) => {',
       '      const href = link.getAttribute("href") || "";',
       '      if (isQuoteSourceLink(href)) link.remove();',
       '    });',
-      '    return toText(copy);',
+      '    let value = toText(copy);',
+      '    value = value.replace(/^\\s*\u56de\u590d\\s+/, "").trim();',
+      '    return {',
+      '      value: value,',
+      '      author: attributionMatch ? attributionMatch[1].trim() : target.author,',
+      '      time: attributionMatch ? attributionMatch[2].trim() : "",',
+      '      threadId: target.threadId, postId: target.postId, floor: target.floor',
+      '    };',
       '  };',
       '  const isInlineImageAttachment = (node) => {',
       '    if (node.classList && node.classList.contains("attachimg")) return true;',
@@ -4790,7 +4875,7 @@ export struct ThreadDetailPage {
       '  };',
       '  const extractContent = (body, postContainer) => {',
       '    const values = [];',
-      '    const push = (kind, value, url, previewUrl) => {',
+      '    const push = (kind, value, url, previewUrl, quoteData) => {',
       '      const text = (value || "").trim();',
       '      if (kind === "text" && !text) return;',
       '      if (url && values.some((item) => item.kind === kind && item.url === url)) return;',
@@ -4799,6 +4884,13 @@ export struct ThreadDetailPage {
       '      const item = { kind: kind, value: text || url || "", url: url };',
       '      if (!url) delete item.url;',
       '      if (previewUrl && previewUrl !== url) item.previewUrl = previewUrl;',
+      '      if (quoteData) {',
+      '        if (quoteData.author) item.quoteAuthor = quoteData.author;',
+      '        if (/^\\d{1,20}$/.test(quoteData.threadId || "")) item.quoteThreadId = quoteData.threadId;',
+      '        if (/^\\d{1,20}$/.test(quoteData.postId || "")) item.quotePostId = quoteData.postId;',
+      '        if (Number.isFinite(quoteData.floor) && quoteData.floor > 0) item.quoteFloor = quoteData.floor;',
+      '        if (quoteData.time) item.quoteTime = quoteData.time;',
+      '      }',
       '      values.push(item);',
       '    };',
       '    const walk = (node) => {',
@@ -4806,6 +4898,7 @@ export struct ThreadDetailPage {
       '      if (node.nodeType !== 1) return;',
       '      const tag = node.tagName.toLowerCase();',
       '      if (tag === "br") { push("text", "\\n"); return; }',
+      '      if (tag === "i" && node.classList && node.classList.contains("pstatus")) return;',
       '      // The poll is rendered as a separate native card. Do not let its',
       '      // form controls and option labels leak into the post body.',
       '      if (tag === "form" && (node.id || "") === "poll") return;',
@@ -4823,9 +4916,16 @@ export struct ThreadDetailPage {
       '        return;',
       '      }',
       '      if (node.classList && node.classList.contains("quote")) {',
-      '        const quoteText = getQuoteText(node);',
-      '        if (quoteText) push("quote", quoteText, "");',
+      '        const quoteData = getQuoteData(node);',
+      '        if (quoteData.value || quoteData.postId) push("quote", quoteData.value, "", "", quoteData);',
       '        return;',
+      '      }',
+      '      if (tag === "strong") {',
+      '        const quoteTarget = getQuoteTarget(node);',
+      '        if (quoteTarget.postId && quoteTarget.floor > 0 && /^\\s*\u56de\u590d\\s*\\d+\\s*#/.test(toText(node))) {',
+      '          push("quote", "", "", "", quoteTarget);',
+      '          return;',
+      '        }',
       '      }',
       '      if (tag === "img") {',
       '        const imageUrls = getImageUrls(node);',
@@ -4967,6 +5067,7 @@ export struct ThreadDetailPage {
       '    const authorUserId = getUserId(replyAuthorNode) || getUserId(authorNode);',
       '    const floorNode = post.querySelector("td.postauthor .postinfo strong em, .postinfo strong em") || postContainer.querySelector("td.postauthor .postinfo strong em, .postinfo strong em");',
       '    const bodyNode = layout === "postmessage-fallback" ? post : (post.querySelector(".replycon") || post.querySelector("[id^=\\"postmessage_\\"]") || post.querySelector("td.t_msgfont") || post.querySelector(".locked") || post);',
+      '    const statusNode = bodyNode ? bodyNode.querySelector("i.pstatus") : null;',
       '    const floorMatch = /\\d+/.exec(toText(floorNode));',
       '    return {',
       '      id: postId || ("post-" + index),',
@@ -4975,9 +5076,22 @@ export struct ThreadDetailPage {
       '      authorName: authorName,',
       '      authorUserId: authorUserId,',
       '      publishedAt: toText(post.querySelector(".replytop time, .replytop em, .authorinfo em") || authorMarker),',
+      '      statusText: toText(statusNode).slice(0, 240),',
       '      content: extractContent(bodyNode, postContainer)',
       '    };',
       '  }).filter((post) => post.threadId.length > 0);',
+      '  const postsById = new Map(posts.filter((post) => /^\\d{1,20}$/.test(post.id)).map((post) => [post.id, post]));',
+      '  const quotePreviewText = (post) => post.content.filter((item) => item.kind === "text" || item.kind === "quote").map((item) => item.value || "").filter((value) => value.length > 0).join(" ").replace(/\\s+/g, " ").trim();',
+      '  posts.forEach((post) => post.content.forEach((item) => {',
+      '    if (item.kind !== "quote" || !item.quotePostId) return;',
+      '    const sourcePost = postsById.get(item.quotePostId);',
+      '    if (!sourcePost) return;',
+      '    item.quoteAuthor = sourcePost.authorName || item.quoteAuthor || "";',
+      '    item.quoteThreadId = sourcePost.threadId || item.quoteThreadId || "";',
+      '    item.quoteFloor = sourcePost.floor;',
+      '    const preview = quotePreviewText(sourcePost);',
+      '    if (preview) item.value = preview;',
+      '  }));',
       '  let lastPage = 1;',
       '  const readPageNumber = (value) => {',
       '    const raw = (value || "").replace(/&amp;/g, "&");',

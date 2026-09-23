@@ -157,7 +157,8 @@ export function parseThreadWebPayload(rawResult: string): ThreadWebPayload | nul
       typeof payload.loadSequence !== 'number' || typeof payload.layout !== 'string' ||
       typeof payload.postNodeCount !== 'number' || !isFourD4yPageAccessState(payload.accessState) ||
       typeof payload.hasChallenge !== 'boolean' || typeof payload.errorMessage !== 'string' ||
-      !Array.isArray(payload.posts) || (payload.poll !== undefined && !isThreadPollValid(payload.poll))) {
+      !Array.isArray(payload.posts) || !areThreadPostsValid(payload.posts) ||
+      (payload.poll !== undefined && !isThreadPollValid(payload.poll))) {
       return null;
     }
     return payload;
@@ -337,6 +338,46 @@ function areWebThreadSummariesValid(threads: WebThreadSummary[]): boolean {
       typeof thread.hasImage !== 'boolean' ||
       typeof thread.createdAt !== 'string' || typeof thread.isPinned !== 'boolean') {
       return false;
+    }
+  }
+  return true;
+}
+
+function areThreadPostsValid(posts: ThreadPost[]): boolean {
+  if (posts.length > 200) {
+    return false;
+  }
+  for (let postIndex: number = 0; postIndex < posts.length; postIndex += 1) {
+    const post: ThreadPost = posts[postIndex];
+    if (typeof post.id !== 'string' || typeof post.threadId !== 'string' ||
+      typeof post.floor !== 'number' || !Number.isFinite(post.floor) || post.floor < 1 ||
+      typeof post.authorName !== 'string' ||
+      (post.authorUserId !== undefined && (typeof post.authorUserId !== 'string' ||
+        !/^\d{1,20}$/.test(post.authorUserId))) ||
+      (post.publishedAt !== undefined && typeof post.publishedAt !== 'string') ||
+      (post.statusText !== undefined && (typeof post.statusText !== 'string' || post.statusText.length > 240)) ||
+      !Array.isArray(post.content) || post.content.length > 500) {
+      return false;
+    }
+    for (let contentIndex: number = 0; contentIndex < post.content.length; contentIndex += 1) {
+      const content = post.content[contentIndex];
+      if (content === null || typeof content !== 'object' ||
+        ['text', 'quote', 'emoji', 'image', 'attachment', 'link', 'video'].indexOf(content.kind) < 0 ||
+        typeof content.value !== 'string' ||
+        (content.url !== undefined && typeof content.url !== 'string') ||
+        (content.previewUrl !== undefined && typeof content.previewUrl !== 'string') ||
+        (content.quoteAuthor !== undefined && (typeof content.quoteAuthor !== 'string' ||
+          content.quoteAuthor.length > 120)) ||
+        (content.quoteThreadId !== undefined && (typeof content.quoteThreadId !== 'string' ||
+          !/^\d{1,20}$/.test(content.quoteThreadId))) ||
+        (content.quotePostId !== undefined && (typeof content.quotePostId !== 'string' ||
+          !/^\d{1,20}$/.test(content.quotePostId))) ||
+        (content.quoteFloor !== undefined && (typeof content.quoteFloor !== 'number' ||
+          !Number.isFinite(content.quoteFloor) || content.quoteFloor < 1)) ||
+        (content.quoteTime !== undefined && (typeof content.quoteTime !== 'string' ||
+          content.quoteTime.length > 120))) {
+        return false;
+      }
     }
   }
   return true;
