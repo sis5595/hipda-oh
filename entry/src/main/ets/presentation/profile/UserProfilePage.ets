@@ -7,6 +7,9 @@ import { buildFourD4yUserProfileUrl, FourD4yUserProfileFact, FourD4yUserProfileP
   parseFourD4yUserProfilePayload } from '../../domain/profile/FourD4yUserProfileContracts';
 import { UserProfileRouteParams } from './UserProfileRouteState';
 import { createBlacklistRouteParams } from '../blacklist/BlacklistRouteState';
+import { createPrivateMessageRouteParams } from '../notice/PrivateMessageRouteState';
+import { createAuthorSearchRouteParams } from '../search/SearchRouteState';
+import { FourD4yBlacklistState } from '../../domain/blacklist/FourD4yBlacklistState';
 
 /**
  * Native, read-only view of the public profile data that 4D4Y itself exposes
@@ -17,9 +20,12 @@ import { createBlacklistRouteParams } from '../blacklist/BlacklistRouteState';
 export struct UserProfilePage {
   @Consume('pathStack') pathStack: NavPathStack;
   @Consume('authState') isLoggedIn: boolean;
+  @Consume('blacklistState') blacklistState: FourD4yBlacklistState;
   @State route: UserProfileRouteParams = { userId: '', userName: '' };
   @State resolvedUserName: string = '';
   @State isOnline: boolean = false;
+  @State avatarUrl: string = '';
+  @State blacklistActionLabel: string = '黑名单';
   @State facts: FourD4yUserProfileFact[] = [];
   @State isLoading: boolean = true;
   @State statusMessage: string = '';
@@ -85,7 +91,7 @@ export struct UserProfilePage {
       .width('100%')
       .height('100%')
     }
-    .title(this.resolvedUserName || this.route.userName || '用户资料')
+    .title('用户信息')
     .menus(this.buildTitleActions)
     .onReady((context: NavDestinationContext) => {
       this.initializeRoute(context.pathInfo.param as UserProfileRouteParams);
@@ -94,50 +100,89 @@ export struct UserProfilePage {
 
   @Builder
   private buildHeader() {
-    Row({ space: 8 }) {
-      Text('UID ' + this.route.userId)
-        .fontSize(12)
-        .fontColor($r('app.color.text_secondary'))
-      if (!this.isLoading && this.statusMessage.length === 0) {
-        Text(this.isOnline ? '在线' : '离线')
-          .fontSize(12)
-          .fontColor(this.isOnline ? $r('app.color.success_text') : $r('app.color.text_secondary'))
+    Column({ space: 8 }) {
+      Row({ space: 10 }) {
+        Stack() {
+          Text((this.resolvedUserName || this.route.userName).substring(0, 1).toUpperCase())
+            .fontSize(28)
+            .fontColor($r('app.color.on_brand'))
+            .textAlign(TextAlign.Center)
+            .width(68)
+            .height(68)
+          if (this.avatarUrl.length > 0) {
+            Image(this.avatarUrl)
+              .width(68)
+              .height(68)
+              .objectFit(ImageFit.Cover)
+              .borderRadius(34)
+          }
+        }
+        .width(68)
+        .height(68)
+        .borderRadius(34)
+        .backgroundColor($r('app.color.drawer_avatar'))
+        Text(this.resolvedUserName || this.route.userName)
+          .fontSize(20)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+        Button('搜索帖子')
+          .fontSize(14)
+          .height(38)
+          .enabled(this.canUseProfileActions())
+          .onClick(() => {
+            if (this.canUseProfileActions()) {
+              this.pathStack.pushPathByName('Search', createAuthorSearchRouteParams(
+                this.route.userId, this.resolvedUserName || this.route.userName));
+            }
+          })
       }
-      Text('只读资料')
-        .fontSize(12)
-        .fontColor($r('app.color.text_muted'))
+      .width('100%')
+      Row({ space: 10 }) {
+        Text('UID ' + this.route.userId)
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'))
+        if (!this.isLoading && this.statusMessage.length === 0 && this.isOnline) {
+          Text('在线')
+            .fontSize(12)
+            .fontColor($r('app.color.success_text'))
+        }
+      }
+      .width('100%')
     }
     .width('100%')
-    .height(32)
-    .padding({ left: 16, right: 16 })
-    .backgroundColor($r('app.color.surface_subtle'))
+    .padding({ left: 16, right: 16, top: 12, bottom: 12 })
   }
 
   @Builder
   private buildTitleActions() {
-    Row({ space: 2 }) {
-      Text('黑名单')
-        .fontSize(15)
-        .fontColor($r('app.color.brand'))
-        .height(42)
-        .padding({ left: 8, right: 8 })
-        .opacity(!this.isLoading && (this.resolvedUserName || this.route.userName).length > 0 ? 1 : 0.35)
-        .onClick(() => {
-          if (!this.isLoading && (this.resolvedUserName || this.route.userName).length > 0) {
-            this.pathStack.pushPathByName('Blacklist', createBlacklistRouteParams(
-              this.resolvedUserName || this.route.userName));
-          }
-        })
-      Image($r('app.media.toolbar_refresh'))
+    Row({ space: 0 }) {
+      Image($r('app.media.drawer_message'))
         .width(42)
         .height(42)
         .objectFit(ImageFit.Contain)
         .fillColor($r('app.color.text_detail'))
         .padding(9)
-        .opacity(!this.isLoading && this.route.userId.length > 0 ? 1 : 0.35)
+        .opacity(this.canUseProfileActions() ? 1 : 0.35)
         .onClick(() => {
-          if (!this.isLoading && this.route.userId.length > 0) {
-            this.loadProfile();
+          if (this.canUseProfileActions()) {
+            this.pathStack.pushPathByName('PrivateMessageDetail', createPrivateMessageRouteParams(
+              this.route.userId, this.resolvedUserName || this.route.userName, true));
+          }
+        })
+      Text(this.blacklistActionLabel)
+        .fontSize(15)
+        .fontColor($r('app.color.brand'))
+        .height(42)
+        .padding({ left: 8, right: 8 })
+        .opacity(this.canUseProfileActions() ? 1 : 0.35)
+        .onClick(() => {
+          if (this.canUseProfileActions()) {
+            this.pathStack.pushPathByName('Blacklist', createBlacklistRouteParams(
+              this.resolvedUserName || this.route.userName, true), (_popInfo: PopInfo) => {
+                this.updateBlacklistActionLabel();
+              });
           }
         })
     }
@@ -206,20 +251,13 @@ export struct UserProfilePage {
 
   @Builder
   private buildFact(fact: FourD4yUserProfileFact) {
-    Column({ space: 5 }) {
-      Text(fact.label)
-        .fontSize(12)
-        .fontColor($r('app.color.text_secondary'))
-      Text(fact.value)
-        .fontSize(15)
-        .fontColor($r('app.color.text_primary'))
-        .lineHeight(22)
-        .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-        .width('100%')
-    }
-    .alignItems(HorizontalAlign.Start)
+    Text(fact.label + '：' + fact.value)
+      .fontSize(15)
+      .fontColor($r('app.color.text_primary'))
+      .lineHeight(24)
+      .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
     .width('100%')
-    .padding({ left: 16, right: 16, top: 9, bottom: 10 })
+    .padding({ left: 16, right: 16, top: 3, bottom: 3 })
   }
 
   @Builder
@@ -245,10 +283,23 @@ export struct UserProfilePage {
     this.route = route;
     this.resolvedUserName = '';
     this.isOnline = false;
+    this.avatarUrl = '';
     this.facts = [];
     this.statusMessage = '';
     this.needsWebVerification = false;
+    this.updateBlacklistActionLabel();
     this.loadProfile();
+  }
+
+  private canUseProfileActions(): boolean {
+    return !this.isLoading && this.statusMessage.length === 0 && /^\d{1,20}$/.test(this.route.userId) &&
+      (this.resolvedUserName || this.route.userName).length > 0;
+  }
+
+  private updateBlacklistActionLabel(): void {
+    const userName: string = this.resolvedUserName || this.route.userName;
+    this.blacklistActionLabel = !this.blacklistState.hasSnapshot() ? '黑名单' :
+      (this.blacklistState.isBlacklisted(userName) ? '移出黑名单' : '加入黑名单');
   }
 
   private loadProfile(): void {
@@ -345,7 +396,9 @@ export struct UserProfilePage {
       this.terminalLoadSequence = expectedSequence;
       this.resolvedUserName = payload.userName;
       this.isOnline = payload.isOnline;
+      this.avatarUrl = payload.avatarUrl;
       this.facts = payload.facts;
+      this.updateBlacklistActionLabel();
       this.statusMessage = '';
       this.isLoading = false;
       this.needsWebVerification = false;
@@ -398,19 +451,30 @@ export struct UserProfilePage {
       '  uidNodes.some((node) => { const match = /(?:UID\\s*[:：]\\s*|\\(UID\\s*[:：]\\s*)(\\d{1,20})/.exec(text(node)); if (match) { userId = match[1]; return true; } return false; });',
       '  const onlineImage = profileRoot ? profileRoot.querySelector(".itemtitle img") : null;',
       '  const isOnline = !!onlineImage && /online/i.test(onlineImage.getAttribute("src") || "");',
+      '  const avatarNode = document.querySelector("div.side div.profile_side div.avatar img");',
+      '  let avatarUrl = "";',
+      '  try { const candidate = new URL(avatarNode ? (avatarNode.getAttribute("src") || "") : "", location.href);',
+      '    if (candidate.protocol === "https:" && /^(www|img02)\\.4d4y\\.com$/i.test(candidate.hostname) &&',
+      '      /^\\/forum\\/uc_server\\/data\\/avatar\\//i.test(candidate.pathname)) avatarUrl = candidate.href;',
+      '  } catch (_error) {}',
       '  const facts = []; const seen = new Set();',
-      '  const factNodes = profileRoot ? Array.from(profileRoot.querySelectorAll(".main .s_clear ul.commonlist li, ul.commonlist li")) : [];',
-      '  factNodes.forEach((node) => {',
+      '  const headings = profileRoot ? Array.from(profileRoot.querySelectorAll("h3.blocktitle")).slice(0, 2) : [];',
+      '  const addFact = (node, requireLabel) => {',
       '    const value = text(node); if (!value || seen.has(value) || facts.length >= 60) return; seen.add(value);',
       '    const match = /^([^:：]{1,80})[：:]\\s*(.+)$/.exec(value);',
+      '    if (!match && requireLabel) return;',
       '    facts.push({ label: match ? match[1].trim() : "公开资料", value: (match ? match[2] : value).trim().slice(0, 400) });',
-      '  });',
+      '  };',
+      '  if (headings.length > 0) addFact(headings[0], true);',
+      '  const factNodes = profileRoot ? Array.from(profileRoot.querySelectorAll(".main .s_clear ul.commonlist li, ul.commonlist li")) : [];',
+      '  factNodes.forEach((node) => addFact(node, false));',
+      '  if (headings.length > 1) addFact(headings[1], true);',
       '  const errorNode = document.querySelector("div.alert_error, div.alert_info, #messagetext, .box.message, .messagebox, .showmessage, p.message, [class*=message][class*=box]");',
       '  const knownError = pageText.split(/[。！？]/).find((part) => /(用户不存在|指定的用户|无权访问|您无权|抱歉|错误|不存在)/.test(part)) || "";',
       '  return JSON.stringify({',
       '    requestedUserId: requestedUserId, loadSequence: loadSequence, accessState: accessState,',
       '    hasChallenge: document.documentElement.innerHTML.indexOf("challenge-platform") >= 0 || document.documentElement.innerHTML.indexOf("cf-chl-") >= 0,',
-      '    profileLayoutFound: !!profileRoot && !!titleRoot, userId: userId, userName: userName, isOnline: isOnline,',
+      '    profileLayoutFound: !!profileRoot && !!titleRoot, userId: userId, userName: userName, isOnline: isOnline, avatarUrl: avatarUrl,',
       '    facts: facts, errorMessage: (text(errorNode) || knownError.trim()).slice(0, 240)',
       '  });',
       '})()'

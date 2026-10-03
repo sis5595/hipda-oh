@@ -17,6 +17,7 @@ import { FourD4ySearchFormPayload, FourD4ySearchMode, FourD4ySearchPagePayload,
   parseFourD4ySearchFormPayload } from '../../domain/search/FourD4ySearchContracts';
 import { buildFourD4ySearchRequestUrl } from '../../domain/search/FourD4ySearchRequest';
 import { createThreadRouteParams } from '../thread/ThreadRouteState';
+import { SearchRouteParams } from './SearchRouteState';
 
 /**
  * Native UI over the current server-rendered 4D4Y search form.
@@ -67,6 +68,10 @@ export struct SearchPage {
   private postResolveSequence: number = 0;
   private postResolveTimeoutId: number = -1;
   private readonly loadTimeoutMillis: number = 30000;
+  private profileSearchUserId: string = '';
+  @State profileSearchName: string = '';
+  private pendingProfileSearch: boolean = false;
+  private skipNextHistoryEntry: boolean = false;
 
   aboutToAppear(): void {
     this.loadHistory();
@@ -115,7 +120,19 @@ export struct SearchPage {
       .height('100%')
       .align(Alignment.Top)
     }
-    .title('搜索')
+    .title(this.profileSearchName.length > 0 ? this.profileSearchName + '的帖子' : '搜索')
+    .onReady((context: NavDestinationContext) => {
+      const route: SearchRouteParams | null = context.pathInfo.param as SearchRouteParams | null;
+      if (route !== null && route !== undefined && /^\d{1,20}$/.test(route.authorUserId)) {
+        this.profileSearchUserId = route.authorUserId;
+        this.profileSearchName = route.authorName;
+        this.keyword = route.authorUserId;
+        this.selectedMode = FourD4ySearchMode.Author;
+        this.selectedForumId = 'all';
+        this.pendingProfileSearch = true;
+        this.startProfileSearchIfReady();
+      }
+    })
   }
 
   @Builder
@@ -572,6 +589,7 @@ export struct SearchPage {
       this.searchForm = payload;
       this.viewerUserId = payload.viewerUserId;
       this.statusMessage = this.getSearchFormReadyMessage(payload);
+      this.startProfileSearchIfReady();
     } catch (_error) {
       this.failFormProbe(expectedProbeSequence, '暂时无法读取 4D4Y 搜索表单，请检查网络后重试。');
     }
@@ -613,7 +631,11 @@ export struct SearchPage {
     this.nextPageUrl = '';
     this.statusMessage = '';
     this.startResultLoadWatchdog(loadSequence);
-    this.addHistory({ keyword: normalizedKeyword, mode: this.selectedMode, forumId: this.selectedForumId });
+    if (this.skipNextHistoryEntry) {
+      this.skipNextHistoryEntry = false;
+    } else {
+      this.addHistory({ keyword: normalizedKeyword, mode: this.selectedMode, forumId: this.selectedForumId });
+    }
     const searchUrl: string | null = buildFourD4ySearchRequestUrl(FourD4ySession.forumRoot,
       this.searchForm, this.selectedMode, normalizedKeyword, this.selectedForumId);
     if (searchUrl === null) {
@@ -627,6 +649,15 @@ export struct SearchPage {
     this.activeSearchMode = this.selectedMode;
     this.activeSearchKeyword = normalizedKeyword;
     this.loadNativeSearchResults(searchUrl, loadSequence);
+  }
+
+  private startProfileSearchIfReady(): void {
+    if (!this.pendingProfileSearch || this.searchForm === null || this.profileSearchUserId.length === 0) {
+      return;
+    }
+    this.pendingProfileSearch = false;
+    this.skipNextHistoryEntry = true;
+    void this.beginSearch();
   }
 
   private loadSearchPage(url: string): void {

@@ -56,6 +56,9 @@ import { appendFourD4yThreadPosts, buildFourD4yPostCopyText, buildFourD4yPostSha
   normalizeFourD4yThreadActionId } from
   '../../domain/thread/FourD4yThreadActions';
 import { isQualifiedFourD4yRightSwipe } from '../../domain/navigation/FourD4yHorizontalGesture';
+import { countObservedLastPageReplies, FourD4yObservedReplyCounts } from
+  '../../domain/thread/FourD4yObservedReplyCounts';
+import { FourD4yAccountState } from '../../domain/account/FourD4yAccountState';
 
 enum ReplyWebOperation {
   Preflight = 'preflight',
@@ -86,6 +89,8 @@ export struct ThreadDetailPage {
   @Consume('attentionState') attentionState: FourD4yAttentionState;
   @Consume('blacklistState') blacklistState: FourD4yBlacklistState;
   @Consume('readHistoryState') readHistoryState: FourD4yReadHistoryState;
+  @Consume('observedReplyCounts') observedReplyCounts: FourD4yObservedReplyCounts;
+  @Consume('accountState') accountState: FourD4yAccountState;
   @State route: ThreadRouteParams = {
     threadId: '',
     threadTitle: '',
@@ -264,6 +269,7 @@ export struct ThreadDetailPage {
   private attachmentDownloadGuid: string = '';
 
   aboutToAppear(): void {
+    this.observedReplyCounts.syncSession(this.accountState.getSessionGeneration());
     this.subscribeToBlacklistState();
     void this.restoreReaderSettings();
   }
@@ -3660,6 +3666,13 @@ export struct ThreadDetailPage {
       this.lastPage = this.authorOnlyUserId.length > 0 ?
         Math.max(this.currentPage, payload.lastPage) :
         Math.max(this.currentPage, payload.lastPage, this.estimateLastPage());
+      if (this.authorOnlyUserId.length === 0) {
+        const completeReplyCount: number | undefined = countObservedLastPageReplies(
+          payload.posts, payload.currentPage, payload.lastPage);
+        if (completeReplyCount !== undefined) {
+          this.observedReplyCounts.observe(this.route.threadId, completeReplyCount);
+        }
+      }
       this.selectedPage = this.currentPage;
       if (payload.title.length > 0) {
         this.resolvedTitle = payload.title;
@@ -4876,11 +4889,14 @@ export struct ThreadDetailPage {
       '  const extractContent = (body, postContainer) => {',
       '    const values = [];',
       '    const push = (kind, value, url, previewUrl, quoteData) => {',
-      '      const text = (value || "").trim();',
+      '      // NG appends adjacent text fragments; a DOM-node boundary is not',
+      '      // a line break. Trim only after the complete text run is read, so',
+      '      // real <br> and spaces around inline formatting survive.',
+      '      const text = kind === "text" ? (value || "") : (value || "").trim();',
       '      if (kind === "text" && !text) return;',
       '      if (url && values.some((item) => item.kind === kind && item.url === url)) return;',
       '      const last = values.length > 0 ? values[values.length - 1] : null;',
-      '      if (kind === "text" && last && last.kind === "text") { last.value = (last.value + "\\n" + text).trim(); return; }',
+      '      if (kind === "text" && last && last.kind === "text") { last.value += text; return; }',
       '      const item = { kind: kind, value: text || url || "", url: url };',
       '      if (!url) delete item.url;',
       '      if (previewUrl && previewUrl !== url) item.previewUrl = previewUrl;',
@@ -4893,10 +4909,15 @@ export struct ThreadDetailPage {
       '      }',
       '      values.push(item);',
       '    };',
-      '    const walk = (node) => {',
-      '      if (node.nodeType === 3) { push("text", node.nodeValue || ""); return; }',
+      '    const blockBreak = () => {',
+      '      const last = values.length > 0 ? values[values.length - 1] : null;',
+      '      if (last && last.kind === "text" && !/\\n[ \\t\\r\\f]*$/.test(last.value)) push("text", "\\n");',
+      '    };',
+      '    const walk = (node, preserveWhitespace) => {',
+      '      if (node.nodeType === 3) { const raw = node.nodeValue || ""; push("text", preserveWhitespace ? raw : raw.replace(/[ \\t\\r\\n\\f]+/g, " ")); return; }',
       '      if (node.nodeType !== 1) return;',
       '      const tag = node.tagName.toLowerCase();',
+      '      if (tag === "script" || tag === "style") return;',
       '      if (tag === "br") { push("text", "\\n"); return; }',
       '      if (tag === "i" && node.classList && node.classList.contains("pstatus")) return;',
       '      // The poll is rendered as a separate native card. Do not let its',
@@ -4953,7 +4974,10 @@ export struct ThreadDetailPage {
       '        if (url) push(isVideoUrl(url) ? "video" : "link", isVideoUrl(url) ? "视频引用" : url, url);',
       '        return;',
       '      }',
-      '      Array.from(node.childNodes).forEach((child) => walk(child));',
+      '      const isBlock = node !== body && /^(?:p|div|li|blockquote|pre|tr|h[1-6])$/.test(tag);',
+      '      if (isBlock) blockBreak();',
+      '      Array.from(node.childNodes).forEach((child) => walk(child, preserveWhitespace || tag === "pre"));',
+      '      if (isBlock) blockBreak();',
       '    };',
       '    if (body) walk(body);',
       '    // 4D4Y may associate uploaded pictures with a post without placing an',
@@ -4968,7 +4992,8 @@ export struct ThreadDetailPage {
       '        if (imageUrls.url && !isDecoration(imageUrls.url) && !isEmoji(imageUrls.url)) push("image", "图片", imageUrls.url, imageUrls.previewUrl);',
       '      });',
       '    }',
-      '    return values;',
+      '    values.forEach((item) => { if (item.kind === "text") item.value = item.value.trim(); });',
+      '    return values.filter((item) => item.kind !== "text" || item.value.length > 0);',
       '  };',
       '  const params = new URLSearchParams(location.search);',
       '  const currentUserLink = document.querySelector("#umenu > cite > a[href], #umenu cite a[href]");',
@@ -5065,7 +5090,9 @@ export struct ThreadDetailPage {
       '    const rawAuthorName = replyAuthorName || (authorLineMatch ? authorLineMatch[1].trim() : "") || toText(authorNode) || (authorNode ? (authorNode.getAttribute("data-username") || authorNode.getAttribute("data-user-name") || authorNode.getAttribute("data-author") || authorNode.getAttribute("title") || "") : "") || (authorImage ? (authorImage.getAttribute("alt") || "") : "");',
       '    const authorName = /^(发表回复|回复|引用)$/.test(rawAuthorName) ? "" : rawAuthorName;',
       '    const authorUserId = getUserId(replyAuthorNode) || getUserId(authorNode);',
-      '    const floorNode = post.querySelector("td.postauthor .postinfo strong em, .postinfo strong em") || postContainer.querySelector("td.postauthor .postinfo strong em, .postinfo strong em");',
+      '    const floorSelector = "td.postcontent .postinfo strong a em, td.postauthor .postinfo strong em, .postinfo strong a em, .postinfo strong em, a[id^=postnum] em";',
+      '    const localFloorNode = post.querySelector(floorSelector);',
+      '    const floorNode = localFloorNode || postContainer.querySelector(floorSelector);',
       '    const bodyNode = layout === "postmessage-fallback" ? post : (post.querySelector(".replycon") || post.querySelector("[id^=\\"postmessage_\\"]") || post.querySelector("td.t_msgfont") || post.querySelector(".locked") || post);',
       '    const statusNode = bodyNode ? bodyNode.querySelector("i.pstatus") : null;',
       '    const floorMatch = /\\d+/.exec(toText(floorNode));',
@@ -5073,6 +5100,7 @@ export struct ThreadDetailPage {
       '      id: postId || ("post-" + index),',
       '      threadId: params.get("tid") || "",',
       '      floor: floorMatch ? Number.parseInt(floorMatch[0], 10) : ((requestedPage - 1) * 50) + index + 1,',
+      '      hasExplicitFloor: !!localFloorNode && !!floorMatch,',
       '      authorName: authorName,',
       '      authorUserId: authorUserId,',
       '      publishedAt: toText(post.querySelector(".replytop time, .replytop em, .authorinfo em") || authorMarker),',

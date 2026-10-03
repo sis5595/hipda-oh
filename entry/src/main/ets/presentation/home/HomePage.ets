@@ -9,6 +9,7 @@ import { FourD4yUserSettingsStore } from '../../data/local/FourD4yUserSettingsSt
 import { common } from '@kit.AbilityKit';
 import { FourD4yAccountProfileStore } from '../../data/local/FourD4yAccountProfileStore';
 import { FourD4yAccountProfile } from '../../domain/account/FourD4yAccountContracts';
+import { FourD4yAccountState } from '../../domain/account/FourD4yAccountState';
 import { createMyContentRouteParams } from '../mine/MyContentRouteState';
 import { createMessageCenterRouteParams } from '../notice/MessageCenterRouteState';
 import { FourD4yMessageMode } from '../../domain/notice/FourD4yMessageContracts';
@@ -26,6 +27,7 @@ import { FourD4yLastForumStore } from '../../data/local/FourD4yLastForumStore';
 import { resolveFourD4yHomeForumId } from '../../domain/navigation/FourD4yHomeForumState';
 import { isQualifiedFourD4yRightSwipe } from '../../domain/navigation/FourD4yHorizontalGesture';
 import { formatFourD4yThreadCount, formatFourD4yThreadCreatedDate } from '../../domain/thread/FourD4yThreadDate';
+import { FourD4yObservedReplyCounts } from '../../domain/thread/FourD4yObservedReplyCounts';
 
 enum HomeAppearanceSheetMode {
   Typography = 'typography',
@@ -72,6 +74,9 @@ export struct HomePage {
   @State isForumListPreferenceSaving: boolean = false;
   @Consume('authState') isLoggedIn: boolean;
   @Consume('unreadState') unreadState: FourD4yUnreadState;
+  @Consume('observedReplyCounts') observedReplyCounts: FourD4yObservedReplyCounts;
+  @Consume('accountState') accountState: FourD4yAccountState;
+  @State observedReplyCountRevision: number = 0;
   @State privateMessageUnreadCount: number = 0;
   @State informationReminderUnreadCount: number = 0;
 
@@ -106,11 +111,13 @@ export struct HomePage {
   private unreadPromptSequence: number = 0;
   private isUnreadPromptLoading: boolean = false;
   private unreadStateListenerId: number = -1;
+  private observedReplyCountListenerId: number = -1;
   private lastObservedForegroundGeneration: number = 0;
 
   aboutToAppear(): void {
     webview.WebviewController.setWebDebuggingAccess(false);
     this.subscribeUnreadState();
+    this.subscribeObservedReplyCounts();
     void this.restoreHomeSettingsAndLoadThreads();
     void this.restoreDrawerAccount();
     this.refreshLoginState();
@@ -118,6 +125,7 @@ export struct HomePage {
 
   aboutToDisappear(): void {
     this.unsubscribeUnreadState();
+    this.unsubscribeObservedReplyCounts();
     this.clearForumLoadWatchdog();
     this.clearTopicPermissionWatchdog();
   }
@@ -148,6 +156,9 @@ export struct HomePage {
       Web({ src: '', controller: this.forumWebController })
         .javaScriptAccess(true)
         .domStorageAccess(true)
+        // A new HomePage restarts oh_load at 1, so old board URLs can recur.
+        // The thread list must be read from the current forum response.
+        .cacheMode(CacheMode.Online)
         .onControllerAttached(() => {
           this.onForumControllerAttached();
         })
@@ -924,7 +935,7 @@ export struct HomePage {
               .objectFit(ImageFit.Contain)
               .fillColor($r('app.color.brand'))
           }
-          Text(formatFourD4yThreadCount(thread.replyCount) + '/' +
+          Text(formatFourD4yThreadCount(this.displayReplyCount(thread)) + '/' +
             formatFourD4yThreadCount(thread.viewCount || 0))
             .fontSize(12)
             .fontColor($r('app.color.text_muted'))
@@ -1951,6 +1962,34 @@ export struct HomePage {
       this.syncUnreadState();
     });
     this.syncUnreadState();
+  }
+
+  private subscribeObservedReplyCounts(): void {
+    this.observedReplyCounts.syncSession(this.accountState.getSessionGeneration());
+    if (this.observedReplyCountListenerId > 0) {
+      return;
+    }
+    this.observedReplyCountListenerId = this.observedReplyCounts.subscribe(() => {
+      this.observedReplyCountRevision += 1;
+    });
+    this.observedReplyCountRevision += 1;
+  }
+
+  private unsubscribeObservedReplyCounts(): void {
+    if (this.observedReplyCountListenerId > 0) {
+      this.observedReplyCounts.unsubscribe(this.observedReplyCountListenerId);
+      this.observedReplyCountListenerId = -1;
+    }
+  }
+
+  private displayReplyCount(thread: ThreadSummary): number {
+    // Keep the subscription revision in this ArkUI expression so returning
+    // from a thread redraws its corrected row without a board-wide reload.
+    const revision: number = this.observedReplyCountRevision;
+    if (revision < 0) {
+      return thread.replyCount;
+    }
+    return this.observedReplyCounts.resolve(thread.id, thread.replyCount);
   }
 
   private unsubscribeUnreadState(): void {

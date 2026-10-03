@@ -24,10 +24,7 @@ enum PrivateMessageWebOperation {
   Submit = 'submit'
 }
 
-/**
- * Native, read-only conversation view. Reading follows the forum's ordinary
- * PM GET flow; no client-side send, delete or clear action exists here.
- */
+/** Native conversation view and a compose-only route for a new recipient. */
 @Component
 export struct PrivateMessageDetailPage {
   @Consume('pathStack') pathStack: NavPathStack;
@@ -45,6 +42,7 @@ export struct PrivateMessageDetailPage {
   @State privateMessageFormMessage: string = '';
   @State privateMessageErrorMessage: string = '';
   @State privateMessageCooldownSeconds: number = 0;
+  @State composeOnly: boolean = false;
 
   private readonly nativeClient: FourD4yMessageNativeClient = new FourD4yMessageNativeClient();
   private readonly privateMessageWebController: webview.WebviewController = new webview.WebviewController();
@@ -110,8 +108,10 @@ export struct PrivateMessageDetailPage {
         this.buildToolbar();
         Divider().color($r('app.color.border'));
         this.buildContent();
-        Divider().color($r('app.color.border'));
-        this.buildPrivateMessageComposer();
+        if (!this.composeOnly) {
+          Divider().color($r('app.color.border'));
+          this.buildPrivateMessageComposer();
+        }
       }
       .width('100%')
       .height('100%')
@@ -120,22 +120,25 @@ export struct PrivateMessageDetailPage {
       .width('100%')
       .height('100%')
     }
-    .title(this.route.participantName || '私信')
+    .title(this.composeOnly ? '发送短消息给 ' + this.route.participantName : (this.route.participantName || '私信'))
     .menus(this.buildTitleActions)
     .onReady((context: NavDestinationContext) => {
       const route: PrivateMessageRouteParams = context.pathInfo.param as PrivateMessageRouteParams;
       this.route = route;
+      this.composeOnly = route.composeOnly === true;
       this.hasScheduledReadConfirmation = false;
       this.clearReadConfirmation();
       this.isPrivateMessageRouteReady = true;
-      this.loadConversation();
+      if (!this.composeOnly) {
+        this.loadConversation();
+      }
       this.preparePrivateMessageFormWhenReady();
     })
   }
 
   @Builder
   private buildToolbar() {
-    Text('打开未读私信会按论坛规则标记已读')
+    Text(this.composeOnly ? '收件人：' + this.route.participantName : '打开未读私信会按论坛规则标记已读')
       .fontSize(12)
       .fontColor($r('app.color.text_secondary'))
     .width('100%')
@@ -145,18 +148,20 @@ export struct PrivateMessageDetailPage {
 
   @Builder
   private buildTitleActions() {
-    Image($r('app.media.toolbar_refresh'))
-      .width(42)
-      .height(42)
-      .objectFit(ImageFit.Contain)
-      .fillColor($r('app.color.text_detail'))
-      .padding(9)
-      .opacity(!this.isLoading && !this.isRefreshing ? 1 : 0.35)
-      .onClick(() => {
-        if (!this.isLoading && !this.isRefreshing) {
-          this.loadConversation(this.messages.length > 0);
-        }
-      })
+    if (!this.composeOnly) {
+      Image($r('app.media.toolbar_refresh'))
+        .width(42)
+        .height(42)
+        .objectFit(ImageFit.Contain)
+        .fillColor($r('app.color.text_detail'))
+        .padding(9)
+        .opacity(!this.isLoading && !this.isRefreshing ? 1 : 0.35)
+        .onClick(() => {
+          if (!this.isLoading && !this.isRefreshing) {
+            this.loadConversation(this.messages.length > 0);
+          }
+        })
+    }
   }
 
   @Builder
@@ -173,7 +178,34 @@ export struct PrivateMessageDetailPage {
           .fontColor($r('app.color.text_secondary'))
           .width('100%')
       }
-      Row({ space: 8 }) {
+      if (this.composeOnly) {
+        TextArea({ placeholder: '私信内容', text: this.privateMessageDraft })
+          .fontSize(15)
+          .fontColor($r('app.color.text_primary'))
+          .placeholderColor($r('app.color.text_muted'))
+          .backgroundColor($r('app.color.surface_subtle'))
+          .border({ width: 1, color: $r('app.color.border_strong'), radius: 8 })
+          .height(160)
+          .width('100%')
+          .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+          .enabled(!this.isPrivateMessageSending)
+          .onChange((value: string) => {
+            this.privateMessageDraft = value;
+            if (this.privateMessageErrorMessage.length > 0) {
+              this.privateMessageErrorMessage = '';
+            }
+          })
+        Button('发送')
+          .fontSize(15)
+          .height(42)
+          .enabled(this.canSubmitPrivateMessage())
+          .onClick(() => {
+            if (this.canSubmitPrivateMessage()) {
+              this.submitPrivateMessage();
+            }
+          })
+      } else {
+        Row({ space: 8 }) {
         TextArea({ placeholder: '回复私信', text: this.privateMessageDraft })
           .fontSize(15)
           .fontColor($r('app.color.text_primary'))
@@ -202,9 +234,10 @@ export struct PrivateMessageDetailPage {
               this.submitPrivateMessage();
             }
           })
+        }
+        .alignItems(VerticalAlign.Center)
+        .width('100%')
       }
-      .alignItems(VerticalAlign.Center)
-      .width('100%')
       if (this.privateMessageCooldownSeconds > 0) {
         Text('还需等待 ' + this.privateMessageCooldownSeconds + ' 秒')
           .fontSize(11)
@@ -219,7 +252,14 @@ export struct PrivateMessageDetailPage {
 
   @Builder
   private buildContent() {
-    if (this.isLoading) {
+    if (this.composeOnly && this.messages.length === 0) {
+      Column() {
+        this.buildPrivateMessageComposer();
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      .width('100%')
+    } else if (this.isLoading) {
       Column({ space: 12 }) {
         LoadingProgress()
           .width(32)
@@ -585,6 +625,7 @@ export struct PrivateMessageDetailPage {
     this.pendingPrivateMessage = '';
     this.privateMessageErrorMessage = '';
     this.privateMessageFormMessage = '私信已发送，正在同步会话。';
+    this.composeOnly = false;
     this.startPrivateMessageCooldown();
     this.scheduleConversationRefreshAfterPrivateMessageSend();
   }

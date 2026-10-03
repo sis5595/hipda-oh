@@ -3,9 +3,11 @@ import { estimateLastPageFromReplyCount, ForumLinkKind, ForumWebPayload, FourD4y
 import { findFourD4yReaderScenario, FOUR_D4Y_READER_SCENARIOS, getPendingFourD4yReaderScenarios } from '../main/ets/domain/reader/FourD4yReaderScenarios';
 import { areFourD4yReaderFixturesValueFree, findFourD4yReaderFixture,
   FOUR_D4Y_READER_FIXTURES } from '../main/ets/domain/reader/FourD4yReaderFixtures';
-import { extractFourD4yInlineImageAttachmentIds, FourD4yComposerChoice, FourD4yImageUploadPhase, ForumComposerMode, isExpectedFourD4yComposerPreflight, isExpectedFourD4yComposerSubmission, isReadyFourD4yComposerForm, parseFourD4yComposerPreflightPayload, parseFourD4yComposerSubmissionPayload, parseFourD4yImageUploadStatusPayload } from '../main/ets/domain/composer/FourD4yComposerContracts';
+import { extractFourD4yInlineImageAttachmentIds, FourD4yComposerChoice, FourD4yImageUploadPhase, ForumComposerMode, isExpectedFourD4yComposerPreflight, isExpectedFourD4yComposerSubmission, isReadyFourD4yComposerForm, parseFourD4yComposerPreflightPayload, parseFourD4yComposerSubmissionPayload, parseFourD4yImageUploadStatusPayload, getFourD4yImageUploadComposerAction, supportsFourD4yComposerImageUpload } from '../main/ets/domain/composer/FourD4yComposerContracts';
 import { createEditComposerRouteParams, createNewThreadComposerRouteParams, createQuoteComposerRouteParams } from '../main/ets/presentation/composer/ForumComposerRouteState';
 import { createUserProfileRouteParams } from '../main/ets/presentation/profile/UserProfileRouteState';
+import { createAuthorSearchRouteParams } from '../main/ets/presentation/search/SearchRouteState';
+import { createPrivateMessageRouteParams } from '../main/ets/presentation/notice/PrivateMessageRouteState';
 import { FourD4ySession } from '../main/ets/data/remote/FourD4ySession';
 import { ThreadWebPayload } from '../main/ets/domain/reader/FourD4yReaderContracts';
 import { FOUR_D4Y_FORUM_GROUPS, FOUR_D4Y_QUICK_FORUM_IDS, getFourD4yForums } from '../main/ets/domain/catalog/FourD4yForumCatalog';
@@ -18,6 +20,8 @@ import { appendFourD4yThreadPosts, buildFourD4yPostCopyText, buildFourD4yPostPub
   buildFourD4yThreadShareText } from '../main/ets/domain/thread/FourD4yThreadActions';
 import { formatFourD4yThreadCount, formatFourD4yThreadCreatedDate } from
   '../main/ets/domain/thread/FourD4yThreadDate';
+import { countObservedLastPageReplies, FourD4yObservedReplyCounts } from
+  '../main/ets/domain/thread/FourD4yObservedReplyCounts';
 import { FOUR_D4Y_MAX_QUICK_FORUMS, FourD4yImageLoadPolicy, FourD4yThemeMode,
   moveFourD4yQuickForumId, parseFourD4yUserSettings,
   serializeFourD4yUserSettings } from '../main/ets/domain/settings/FourD4yUserSettings';
@@ -77,7 +81,8 @@ import { buildFourD4yPrivateMessagePreflightUrl, isExpectedFourD4yPrivateMessage
 import { buildFourD4yUserProfileUrl, FourD4yUserProfileFact, FourD4yUserProfilePayload,
   FourD4yUserProfileReaderOutcome,
   getFourD4yUserProfileReaderOutcome, isCurrentFourD4yUserProfileRequest,
-  isExpectedFourD4yUserProfilePayload, parseFourD4yUserProfilePayload } from
+  isExpectedFourD4yUserProfilePayload, isTrustedFourD4yAvatarUrl,
+  parseFourD4yUserProfilePayload } from
   '../main/ets/domain/profile/FourD4yUserProfileContracts';
 import { buildFourD4yBlacklistUrl, FourD4yBlacklistEntry, FourD4yBlacklistPagePayload,
   FourD4yBlacklistReaderOutcome, getFourD4yBlacklistReaderOutcome,
@@ -1377,6 +1382,25 @@ export default function localUnitTest() {
       expect(parseFourD4yComposerPreflightPayload(JSON.stringify(payload)) === null).assertEqual(true);
     });
 
+    it('supports new-topic image uploads without inventing a thread id', 0, () => {
+      const topic = createNewThreadComposerRouteParams('2', 'Discovery', []);
+      expect(supportsFourD4yComposerImageUpload(topic)).assertEqual(true);
+      expect(getFourD4yImageUploadComposerAction(topic.mode)).assertEqual('newthread');
+      topic.forumId = '';
+      expect(supportsFourD4yComposerImageUpload(topic)).assertEqual(false);
+      const quote = createQuoteComposerRouteParams('2602293', '53528033', 8, 'author', 'topic');
+      quote.forumId = '2';
+      expect(supportsFourD4yComposerImageUpload(quote)).assertEqual(true);
+      expect(getFourD4yImageUploadComposerAction(quote.mode)).assertEqual('reply');
+      quote.threadId = '';
+      expect(supportsFourD4yComposerImageUpload(quote)).assertEqual(false);
+      const edit = createEditComposerRouteParams('2602293', '53528033', 'topic', '2');
+      expect(supportsFourD4yComposerImageUpload(edit)).assertEqual(true);
+      expect(getFourD4yImageUploadComposerAction(edit.mode)).assertEqual('edit');
+      edit.postId = '';
+      expect(supportsFourD4yComposerImageUpload(edit)).assertEqual(false);
+    });
+
     it('requires a subject and newthread action for a new topic form', 0, () => {
       const route = createNewThreadComposerRouteParams('2', 'Discovery', [{ value: '9', label: '聚会' }]);
       const categoryOptions: FourD4yComposerChoice[] = [
@@ -1560,7 +1584,8 @@ export default function localUnitTest() {
       const rawProfile: FourD4yUserProfilePayload = {
         requestedUserId: '456', loadSequence: 9, accessState: FourD4yPageAccessState.Available,
         hasChallenge: false, profileLayoutFound: true, userId: '456', userName: '测试用户',
-        isOnline: true, facts: facts, errorMessage: ''
+        isOnline: true, avatarUrl: 'https://img02.4d4y.com/forum/uc_server/data/avatar/000/00/04/56_avatar_middle.jpg',
+        facts: facts, errorMessage: ''
       };
       const payload = parseFourD4yUserProfilePayload(JSON.stringify(rawProfile));
       expect(payload === null).assertEqual(false);
@@ -1573,11 +1598,24 @@ export default function localUnitTest() {
       payload.userId = '457';
       expect(isExpectedFourD4yUserProfilePayload(payload, '456', 9)).assertEqual(false);
       expect(parseFourD4yUserProfilePayload('{"requestedUserId":"456"}') === null).assertEqual(true);
+      expect(isTrustedFourD4yAvatarUrl(rawProfile.avatarUrl)).assertEqual(true);
+      expect(isTrustedFourD4yAvatarUrl('https://other.example/avatar.jpg')).assertEqual(false);
+      expect(isTrustedFourD4yAvatarUrl('javascript:alert(1)')).assertEqual(false);
+      const searchRoute = createAuthorSearchRouteParams('456', '测试用户');
+      expect(searchRoute.authorUserId).assertEqual('456');
+      expect(searchRoute.authorName).assertEqual('测试用户');
+      expect(createAuthorSearchRouteParams('invalid', '测试用户').authorUserId).assertEqual('');
+      const privateMessageRoute = createPrivateMessageRouteParams('456', ' 测试用户 ', true);
+      expect(privateMessageRoute.participantUserId).assertEqual('456');
+      expect(privateMessageRoute.participantName).assertEqual('测试用户');
+      expect(privateMessageRoute.composeOnly).assertEqual(true);
     });
 
     it('keeps the server blacklist identity and mutation acknowledgement value-free', 0, () => {
       const route = createBlacklistRouteParams('  测试用户  ');
       expect(route.suggestedUserName).assertEqual('测试用户');
+      expect(route.promptForSuggestedUser).assertEqual(false);
+      expect(createBlacklistRouteParams('测试用户', true).promptForSuggestedUser).assertEqual(true);
       expect(isValidFourD4yBlacklistUserName('测试用户')).assertEqual(true);
       expect(isValidFourD4yBlacklistUserName('bad\nname')).assertEqual(false);
       const url: string | null = buildFourD4yBlacklistUrl(12);
@@ -1720,6 +1758,44 @@ export default function localUnitTest() {
       expect(serialized.indexOf('http') < 0).assertEqual(true);
       expect(parseFourD4yReadHistory(serialized).length).assertEqual(2);
       expect(parseFourD4yReadHistory('[{"threadId":"900003","title":"<html>","forumId":"2","lastReadPage":1,"lastReadFloor":1,"visitedAt":1700000000000}]').length).assertEqual(0);
+    });
+
+    it('corrects a stale board count from a confirmed last page', 0, () => {
+      const posts: ThreadPost[] = [];
+      for (let floor: number = 1; floor <= 9; floor += 1) {
+        posts.push({ id: floor.toString(), threadId: '900001', floor: floor,
+          authorName: 'reader', content: [] });
+      }
+      expect(countObservedLastPageReplies(posts, 1, 1)).assertEqual(8);
+      expect(countObservedLastPageReplies(posts, 1, 2) === undefined).assertEqual(true);
+      expect(countObservedLastPageReplies(posts, 2, 2) === undefined).assertEqual(true);
+      posts.splice(4, 1);
+      expect(countObservedLastPageReplies(posts, 1, 1) === undefined).assertEqual(true);
+
+      const lastPagePosts: ThreadPost[] = [
+        { id: '101', threadId: '900002', floor: 101, hasExplicitFloor: true,
+          authorName: 'reader', content: [] },
+        { id: '114', threadId: '900002', floor: 114, hasExplicitFloor: true,
+          authorName: 'reader', content: [] }
+      ];
+      expect(countObservedLastPageReplies(lastPagePosts, 3, 3)).assertEqual(113);
+      expect(countObservedLastPageReplies(lastPagePosts, 2, 3) === undefined).assertEqual(true);
+      lastPagePosts[1].hasExplicitFloor = false;
+      expect(countObservedLastPageReplies(lastPagePosts, 3, 3) === undefined).assertEqual(true);
+
+      const observed: FourD4yObservedReplyCounts = new FourD4yObservedReplyCounts();
+      let updates: number = 0;
+      const listenerId: number = observed.subscribe(() => { updates += 1; });
+      observed.observe('900001', 8, 1000);
+      expect(updates).assertEqual(1);
+      expect(observed.resolve('900001', 6, 1001)).assertEqual(8);
+      expect(observed.resolve('900001', 9, 1001)).assertEqual(9);
+      expect(observed.resolve('900001', 6, 3601001)).assertEqual(6);
+      observed.unsubscribe(listenerId);
+      observed.observe('900001', 10, 3601002);
+      expect(updates).assertEqual(1);
+      observed.syncSession(1);
+      expect(observed.resolve('900001', 6, 3601003)).assertEqual(6);
     });
 
   });

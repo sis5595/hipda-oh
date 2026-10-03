@@ -2,12 +2,14 @@
 export interface PrivateMessageRouteParams {
   participantUserId: string;
   participantName: string;
+  composeOnly?: boolean;
 }
 
 export function createPrivateMessageRouteParams(participantUserId: string,
-  participantName: string): PrivateMessageRouteParams {
+  participantName: string, composeOnly: boolean = false): PrivateMessageRouteParams {
   return {
     participantUserId: /^\d{1,20}$/.test(participantUserId) ? participantUserId : '',
-    participantName: participantName.trim().slice(0, 120)
+    participantName: participantName.trim().slice(0, 120),
+    composeOnly
   };
 }

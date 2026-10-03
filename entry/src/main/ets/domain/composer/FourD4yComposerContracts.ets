@@ -16,6 +16,25 @@ export interface ForumComposerTarget {
   postId: string;
 }
 
+/** New topics upload before a tid exists; never send them to the reply route. */
+export function getFourD4yImageUploadComposerAction(mode: ForumComposerMode): string {
+  if (mode === ForumComposerMode.NewThread) {
+    return 'newthread';
+  }
+  return mode === ForumComposerMode.Edit ? 'edit' : 'reply';
+}
+
+export function supportsFourD4yComposerImageUpload(target: ForumComposerTarget): boolean {
+  if (!/^\d+$/.test(target.forumId)) {
+    return false;
+  }
+  if (target.mode === ForumComposerMode.NewThread) {
+    return true;
+  }
+  return /^\d+$/.test(target.threadId) &&
+    (target.mode !== ForumComposerMode.Edit || /^\d+$/.test(target.postId));
+}
+
 /** A server-provided, visible choice such as the category of a new topic. */
 export interface FourD4yComposerChoice {
   value: string;

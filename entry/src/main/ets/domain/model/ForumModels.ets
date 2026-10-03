@@ -43,6 +43,8 @@ export interface ThreadPost {
   id: string;
   threadId: string;
   floor: number;
+  /** True only when this floor was read from the forum's own post header. */
+  hasExplicitFloor?: boolean;
   authorName: string;
   /** Numeric Discuz uid when the current thread template exposes the author's profile link. */
   authorUserId?: string;

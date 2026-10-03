@@ -25,6 +25,7 @@ import { FourD4yBlacklistState } from '../domain/blacklist/FourD4yBlacklistState
 import { FourD4yReadHistoryState } from '../domain/history/FourD4yReadHistoryState';
 import { FourD4yAccountState } from '../domain/account/FourD4yAccountState';
 import { FourD4yUnreadState } from '../domain/notice/FourD4yUnreadState';
+import { FourD4yObservedReplyCounts } from '../domain/thread/FourD4yObservedReplyCounts';
 import { FourD4yPrivacyConsentStore } from '../data/local/FourD4yPrivacyConsentStore';
 import { FOUR_D4Y_PRIVACY_POLICY_SECTIONS, FourD4yPrivacyPolicySection } from '../domain/privacy/FourD4yPrivacyPolicy';
 
@@ -41,6 +42,8 @@ struct Index {
   @Provide('readHistoryState') readHistoryState: FourD4yReadHistoryState = new FourD4yReadHistoryState();
   @Provide('accountState') accountState: FourD4yAccountState = new FourD4yAccountState();
   @Provide('unreadState') unreadState: FourD4yUnreadState = new FourD4yUnreadState();
+  @Provide('observedReplyCounts') observedReplyCounts: FourD4yObservedReplyCounts =
+    new FourD4yObservedReplyCounts();
   @StorageLink('hipdaoh_privacy_accepted') privacyAccepted: boolean = false;
   @State privacyReady: boolean = false;
   @State isAcceptingPrivacyPolicy: boolean = false;

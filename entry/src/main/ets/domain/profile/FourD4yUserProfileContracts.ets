@@ -16,6 +16,7 @@ export interface FourD4yUserProfilePayload {
   userId: string;
   userName: string;
   isOnline: boolean;
+  avatarUrl: string;
   facts: FourD4yUserProfileFact[];
   errorMessage: string;
 }
@@ -64,6 +65,7 @@ export function parseFourD4yUserProfilePayload(rawResult: string): FourD4yUserPr
       typeof payload.profileLayoutFound !== 'boolean' ||
       (payload.userId.length > 0 && !isDigitsOnly(payload.userId)) ||
       typeof payload.userName !== 'string' || typeof payload.isOnline !== 'boolean' ||
+      typeof payload.avatarUrl !== 'string' || !isTrustedFourD4yAvatarUrl(payload.avatarUrl) ||
       !areProfileFactsValid(payload.facts) || typeof payload.errorMessage !== 'string') {
       return null;
     }
@@ -71,6 +73,12 @@ export function parseFourD4yUserProfilePayload(rawResult: string): FourD4yUserPr
   } catch (_error) {
     return null;
   }
+}
+
+/** Avatars are loaded only from the forum's own avatar directory. */
+export function isTrustedFourD4yAvatarUrl(url: string): boolean {
+  return url.length === 0 ||
+    /^https:\/\/(?:www|img02)\.4d4y\.com\/forum\/uc_server\/data\/avatar\/[A-Za-z0-9/_-]+\.jpe?g(?:\?[^#]*)?$/i.test(url);
 }
 
 export function isExpectedFourD4yUserProfilePayload(payload: FourD4yUserProfilePayload,

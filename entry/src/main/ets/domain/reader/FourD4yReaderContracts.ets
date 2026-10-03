@@ -351,6 +351,7 @@ function areThreadPostsValid(posts: ThreadPost[]): boolean {
     const post: ThreadPost = posts[postIndex];
     if (typeof post.id !== 'string' || typeof post.threadId !== 'string' ||
       typeof post.floor !== 'number' || !Number.isFinite(post.floor) || post.floor < 1 ||
+      (post.hasExplicitFloor !== undefined && typeof post.hasExplicitFloor !== 'boolean') ||
       typeof post.authorName !== 'string' ||
       (post.authorUserId !== undefined && (typeof post.authorUserId !== 'string' ||
         !/^\d{1,20}$/.test(post.authorUserId))) ||

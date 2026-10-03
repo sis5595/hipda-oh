@@ -9,12 +9,15 @@ import { FourD4yComposerChoice, FourD4yComposerImageAttachment, FourD4yComposerP
   extractFourD4yInlineImageAttachmentIds, getFourD4yComposerTitle, isExpectedFourD4yComposerPreflight,
   isExpectedFourD4yComposerSubmission, isReadyFourD4yComposerForm,
   parseFourD4yComposerPreflightPayload, parseFourD4yComposerSubmissionPayload,
-  parseFourD4yImageUploadStatusPayload } from '../../domain/composer/FourD4yComposerContracts';
+  parseFourD4yImageUploadStatusPayload, getFourD4yImageUploadComposerAction,
+  supportsFourD4yComposerImageUpload } from '../../domain/composer/FourD4yComposerContracts';
 import { FourD4yPageAccessState } from '../../domain/reader/FourD4yReaderContracts';
 import { createForumComposerPostEditedResult, createForumComposerReplyPublishedResult,
   ForumComposerRouteParams } from './ForumComposerRouteState';
 import { createThreadRouteParams } from '../thread/ThreadRouteState';
 import { FourD4ySession } from '../../data/remote/FourD4ySession';
+import { buildFourD4yNewThreadSubmissionScript, buildFourD4yNewThreadResultReadScript }
+  from '../../domain/composer/FourD4yNewThreadSubmission';
 
 enum ComposerWebOperation {
   Preflight = 'preflight',
@@ -112,6 +115,7 @@ export struct ForumComposerPage {
   private formSequence: number = 0;
   private submissionSequence: number = 0;
   private formTimeoutId: number = -1;
+  private topicSubmissionPollId: number = -1;
   private isWebControllerAttached: boolean = false;
   private isComposerRouteReady: boolean = false;
   private webOperation: ComposerWebOperation = ComposerWebOperation.Preflight;
@@ -208,6 +212,7 @@ export struct ForumComposerPage {
         Web({ src: '', controller: this.webController })
           .javaScriptAccess(true)
           .domStorageAccess(true)
+          .cacheMode(CacheMode.Online)
           .onControllerAttached(() => {
             this.onComposerControllerAttached();
           })
@@ -269,15 +274,14 @@ export struct ForumComposerPage {
           .height(1)
           .opacity(0)
 
-        if (this.isAdvancedReplyMode()) {
+        if (this.route.mode === ForumComposerMode.NewThread) {
+          this.buildNewThreadEditor();
+        } else if (this.isAdvancedReplyMode()) {
           this.buildAdvancedReplyEditor();
         } else {
           Column() {
             Scroll() {
             Column({ space: 10 }) {
-              if (this.route.mode === ForumComposerMode.NewThread) {
-                this.buildDestinationSummary();
-              }
               this.buildFormState();
 
               if (this.shouldShowTopicMetadata()) {
@@ -405,6 +409,9 @@ export struct ForumComposerPage {
   }
 
   private getComposerTitle(): string {
+    if (this.route.mode === ForumComposerMode.NewThread) {
+      return '发表 · ' + (this.route.forumName || ('板块 ' + this.route.forumId));
+    }
     if (this.route.mode === ForumComposerMode.Quote) {
       return '引用 #' + this.route.quotedFloor + (this.route.quotedAuthorName.length > 0 ?
         (' · ' + this.route.quotedAuthorName) : '');
@@ -413,6 +420,130 @@ export struct ForumComposerPage {
       return '高级回复';
     }
     return getFourD4yComposerTitle(this.route);
+  }
+
+  /** NG's new topic keeps the subject above a full-height multiline editor. */
+  @Builder
+  private buildNewThreadEditor() {
+    Column({ space: 8 }) {
+      TextInput({ placeholder: '标题', text: this.subjectDraft })
+        .id('hipda-oh-composer-subject')
+        .defaultFocus(true)
+        .fontSize(20)
+        .fontColor($r('app.color.text_primary'))
+        .placeholderColor($r('app.color.text_muted'))
+        .backgroundColor($r('app.color.surface_subtle'))
+        .border({ width: 1, color: $r('app.color.border_strong'), radius: 6 })
+        .height(44)
+        .width('100%')
+        .padding({ left: 8, right: 8 })
+        .onChange((value: string) => { this.subjectDraft = value; })
+        .onAppear(() => {
+          setTimeout(() => {
+            this.getUIContext().getFocusController().requestFocus('hipda-oh-composer-subject');
+          }, 0);
+        })
+
+      Scroll() {
+        Column({ space: 8 }) {
+          this.buildFormState();
+          if (this.categoryOptions.length > 0 || this.isImageUploadAvailable) {
+            Row({ space: 8 }) {
+              Blank().layoutWeight(1)
+              if (this.categoryOptions.length > 0) {
+                Button(this.getSelectedCategoryLabel() + ' ▾')
+                  .fontSize(14)
+                  .height(34)
+                  .fontColor($r('app.color.brand'))
+                  .backgroundColor($r('app.color.fill_selected'))
+                  .enabled(!this.isSubmitting)
+                  .bindMenu(this.buildNewThreadCategoryMenu)
+              }
+              if (this.isImageUploadAvailable) {
+                Button(this.isImageUploading ? '正在上传…' : '图片' +
+                  (this.uploadedImageDrafts.length > 0 ? '（' + this.uploadedImageDrafts.length + '）' : ''))
+                  .fontSize(14)
+                  .height(34)
+                  .fontColor($r('app.color.brand'))
+                  .backgroundColor($r('app.color.fill_selected'))
+                  .enabled(this.canSelectImageForUpload())
+                  .onClick(() => { this.startNativeImageUpload(); })
+              }
+            }
+            .width('100%')
+          }
+          if (this.tagsFieldName.length > 0) {
+            TextInput({ placeholder: '标签（用逗号或空格隔开）', text: this.tagsDraft })
+              .fontSize(14)
+              .height(36)
+              .fontColor($r('app.color.text_primary'))
+              .backgroundColor($r('app.color.surface_subtle'))
+              .onChange((value: string) => { this.tagsDraft = value; })
+          }
+          if (this.uploadedImageDrafts.length > 0) {
+            this.buildImageUploadControls(false);
+          }
+        }
+        .alignItems(HorizontalAlign.Start)
+        .width('100%')
+      }
+      .align(Alignment.Top)
+      .constraintSize({ maxHeight: 200 })
+      .width('100%')
+      .scrollBar(BarState.Auto)
+
+      Row({ space: 6 }) {
+        TextArea({ placeholder: '写下内容', text: this.messageDraft })
+          .id(this.composerInputId)
+          .fontSize(18)
+          .fontColor($r('app.color.text_primary'))
+          .placeholderColor($r('app.color.text_muted'))
+          .backgroundColor($r('app.color.surface_subtle'))
+          .border({ width: 1, color: $r('app.color.border_strong'), radius: 6 })
+          .padding(10)
+          .height('100%')
+          .layoutWeight(1)
+          .onChange((value: string) => { this.messageDraft = value; })
+        if (this.isSubmitting) {
+          LoadingProgress().width(48).height(48).padding(10)
+        } else {
+          Image($r('app.media.toolbar_send'))
+            .width(48)
+            .height(48)
+            .objectFit(ImageFit.Contain)
+            .fillColor($r('app.color.brand'))
+            .padding(8)
+            .opacity(this.canSubmit() ? 1 : 0.3)
+            .onClick(() => { this.submit(); })
+        }
+      }
+      .alignItems(VerticalAlign.Bottom)
+      .layoutWeight(1)
+      .width('100%')
+    }
+    .alignItems(HorizontalAlign.Start)
+    .padding({ left: 8, right: 8, top: 8, bottom: 8 })
+    .width('100%')
+    .height('100%')
+  }
+
+  private getSelectedCategoryLabel(): string {
+    const selected: FourD4yComposerChoice | undefined = this.categoryOptions.find(
+      (option: FourD4yComposerChoice) => option.value === this.categoryValue);
+    return selected === undefined ? '分类' : '分类：' + selected.label;
+  }
+
+  @Builder
+  private buildNewThreadCategoryMenu() {
+    Menu() {
+      ForEach(this.categoryOptions, (option: FourD4yComposerChoice) => {
+        MenuItem({ content: option.label })
+          .onClick(() => {
+            this.categoryValue = option.value;
+            this.hasUserSelectedCategory = true;
+          })
+      }, (option: FourD4yComposerChoice) => option.value)
+    }
   }
 
   /** NG keeps the server-generated quote above the editor, never inside it. */
@@ -729,8 +860,9 @@ export struct ForumComposerPage {
   }
 
   @Builder
-  private buildImageUploadControls() {
+  private buildImageUploadControls(showPicker: boolean = true) {
     Column({ space: 8 }) {
+      if (showPicker) {
       Row({ space: 10 }) {
         Button(this.isImageUploading ? '正在上传…' : '添加图片')
           .type(ButtonType.Normal)
@@ -752,6 +884,7 @@ export struct ForumComposerPage {
         }
       }
       .width('100%')
+      }
       if (this.uploadedImageDrafts.length > 0) {
         Text('点击缩略图可放大预览；移除仅影响本次待发送内容。')
           .fontSize(12)
@@ -810,10 +943,12 @@ export struct ForumComposerPage {
         .width('100%')
         .height(124)
       }
-      Text('仅支持 JPG、PNG、GIF、BMP；每次最多选择 9 张，每张最大 20 MB。')
+      if (showPicker) {
+        Text('仅支持 JPG、PNG、GIF、BMP；每次最多选择 9 张，每张最大 20 MB。')
         .fontSize(12)
         .fontColor($r('app.color.text_secondary'))
         .width('100%')
+      }
     }
     .alignItems(HorizontalAlign.Start)
     .width('100%')
@@ -1069,7 +1204,7 @@ export struct ForumComposerPage {
         this.beginSubmission(expectedSequence);
         return;
       }
-      // Always inspect the canonical desktop reply page before enabling the
+      // Always inspect the canonical desktop composer page before enabling the
       // visible upload control. The mobile composer occasionally exposes a
       // hash without the matching upload contract used by 4D4Y clients.
       this.isImageUploadAvailable = false;
@@ -1087,10 +1222,7 @@ export struct ForumComposerPage {
   }
 
   private supportsImageUpload(): boolean {
-    const isSupportedMode: boolean = this.route.mode === ForumComposerMode.Reply ||
-      this.route.mode === ForumComposerMode.Quote || this.route.mode === ForumComposerMode.Edit;
-    return isSupportedMode && /^\d+$/.test(this.route.forumId) && /^\d+$/.test(this.route.threadId) &&
-      (this.route.mode !== ForumComposerMode.Edit || /^\d+$/.test(this.route.postId));
+    return supportsFourD4yComposerImageUpload(this.route);
   }
 
   private canSelectImageForUpload(): boolean {
@@ -1757,14 +1889,47 @@ export struct ForumComposerPage {
     if (!this.isSubmitting) {
       return;
     }
+    let script: string = '';
     try {
-      await this.webController.runJavaScript(this.getSubmissionScript(this.pendingSubject, this.pendingMessage,
+      script = this.getSubmissionScript(this.pendingSubject, this.pendingMessage,
         this.pendingCategoryValue, this.pendingTags, this.pendingImageAttachmentIds,
         this.pendingDiscardImageAttachmentIds, this.pendingRemovedExistingImageAttachmentIds,
-        this.pendingRemovedNewImageAttachmentIds));
+        this.pendingRemovedNewImageAttachmentIds);
+      await this.webController.runJavaScript(script);
+      if (this.route.mode === ForumComposerMode.NewThread && this.isSubmitting) {
+        this.pollNewThreadSubmission(this.submissionSequence);
+      }
     } catch (_error) {
+      if (this.route.mode === ForumComposerMode.NewThread && this.isSubmitting) {
+        this.failSubmission('无法启动发主题提交；草稿已保留，请先核对论坛后重试。');
+      }
       // The navigation following requestSubmit() can interrupt this promise.
       // Only the terminal page parser decides whether it was successful.
+    }
+  }
+
+  private async pollNewThreadSubmission(sequence: number): Promise<void> {
+    this.topicSubmissionPollId = -1;
+    if (!this.isSubmitting || sequence !== this.submissionSequence) {
+      return;
+    }
+    try {
+      const raw: string = await this.webController.runJavaScript(
+        buildFourD4yNewThreadResultReadScript(sequence));
+      if (!this.isSubmitting || sequence !== this.submissionSequence) {
+        return;
+      }
+      if (raw === 'pending' || raw === '"pending"') {
+        this.topicSubmissionPollId = setTimeout(() => { this.pollNewThreadSubmission(sequence); }, 300);
+      } else if (raw === 'uncertain' || raw === '"uncertain"') {
+        this.failSubmission('发主题结果无法确认；请先到论坛核对，勿立即重复发送。');
+      } else {
+        this.readSubmissionResult();
+      }
+    } catch (_error) {
+      if (this.isSubmitting && sequence === this.submissionSequence) {
+        this.failSubmission('读取发主题结果失败；请先到论坛核对，勿立即重复发送。');
+      }
     }
   }
 
@@ -1947,7 +2112,8 @@ export struct ForumComposerPage {
     }
     return url.indexOf('/forum/post.php') >= 0 &&
       url.indexOf('action=' + this.getImageUploadComposerAction()) >= 0 &&
-      url.indexOf('fid=' + this.route.forumId) >= 0 && url.indexOf('tid=' + this.route.threadId) >= 0 &&
+      url.indexOf('fid=' + this.route.forumId) >= 0 &&
+      (this.route.mode === ForumComposerMode.NewThread || url.indexOf('tid=' + this.route.threadId) >= 0) &&
       url.indexOf('oh_image_probe=' + this.imageUploadProbeSequence) >= 0 &&
       (this.route.mode !== ForumComposerMode.Edit || url.indexOf('pid=' + this.route.postId) >= 0);
   }
@@ -2032,7 +2198,7 @@ export struct ForumComposerPage {
   private getNativeDetailedComposerUrl(): string {
     const action: string = this.getImageUploadComposerAction();
     let url: string = 'https://www.4d4y.com/forum/post.php?action=' + action + '&fid=' + this.route.forumId +
-      '&tid=' + this.route.threadId;
+      (this.route.mode === ForumComposerMode.NewThread ? '' : '&tid=' + this.route.threadId);
     if (this.route.mode === ForumComposerMode.Edit) {
       url += '&pid=' + this.route.postId + '&page=1';
     }
@@ -2040,7 +2206,7 @@ export struct ForumComposerPage {
   }
 
   private getImageUploadComposerAction(): string {
-    return this.route.mode === ForumComposerMode.Edit ? 'edit' : 'reply';
+    return getFourD4yImageUploadComposerAction(this.route.mode);
   }
 
   private async getNativeImageUploadCookieHeader(userId: string): Promise<string> {
@@ -2069,7 +2235,7 @@ export struct ForumComposerPage {
     this.isNativeImageUploadProbeLoading = false;
     if (status === 'available') {
       this.isImageUploadAvailable = true;
-      this.formMessage = '已确认当前登录具备图片上传能力；可以添加一张图片。';
+      this.formMessage = '已确认当前登录具备图片上传能力；可以添加图片。';
     } else if (status === 'login-required' || status === 'cookie-missing') {
       this.formMessage = '当前登录未获图片上传权限；请从首页重新登录后再试。';
     } else if (status === 'user-context-missing') {
@@ -2105,7 +2271,8 @@ export struct ForumComposerPage {
     }
     return url.indexOf('/forum/post.php') >= 0 &&
       url.indexOf('action=' + this.getImageUploadComposerAction()) >= 0 &&
-      url.indexOf('fid=' + this.route.forumId) >= 0 && url.indexOf('tid=' + this.route.threadId) >= 0 &&
+      url.indexOf('fid=' + this.route.forumId) >= 0 &&
+      (this.route.mode === ForumComposerMode.NewThread || url.indexOf('tid=' + this.route.threadId) >= 0) &&
       url.indexOf('oh_image_probe=' + this.imageUploadSurfaceSequence) >= 0 &&
       (this.route.mode !== ForumComposerMode.Edit || url.indexOf('pid=' + this.route.postId) >= 0);
   }
@@ -2174,6 +2341,10 @@ export struct ForumComposerPage {
   }
 
   private clearFormWatchdog(): void {
+    if (this.topicSubmissionPollId >= 0) {
+      clearTimeout(this.topicSubmissionPollId);
+      this.topicSubmissionPollId = -1;
+    }
     if (this.formTimeoutId >= 0) {
       clearTimeout(this.formTimeoutId);
       this.formTimeoutId = -1;
@@ -2432,6 +2603,13 @@ export struct ForumComposerPage {
   private getSubmissionScript(subject: string, message: string, categoryValue: string, tags: string,
     uploadedImageAttachmentIds: string[], discardedImageAttachmentIds: string[],
     removedExistingImageAttachmentIds: string[], removedNewImageAttachmentIds: string[]): string {
+    if (this.route.mode === ForumComposerMode.NewThread) {
+      return buildFourD4yNewThreadSubmissionScript({
+        forumId: this.route.forumId, categoryValue, subject, message, tags,
+        imageIds: uploadedImageAttachmentIds, discardedImageIds: discardedImageAttachmentIds,
+        submissionSequence: this.submissionSequence
+      });
+    }
     const safeSubject: string = JSON.stringify(subject);
     const safeMessage: string = JSON.stringify(message);
     const safeCategoryFieldName: string = JSON.stringify(this.categoryFieldName);
@@ -2442,8 +2620,7 @@ export struct ForumComposerPage {
     const safeDiscardedImageAttachmentIds: string = JSON.stringify(discardedImageAttachmentIds);
     const safeRemovedExistingImageAttachmentIds: string = JSON.stringify(removedExistingImageAttachmentIds);
     const safeRemovedNewImageAttachmentIds: string = JSON.stringify(removedNewImageAttachmentIds);
-    const expectedAction: string = this.route.mode === ForumComposerMode.NewThread ? 'newthread' :
-      (this.route.mode === ForumComposerMode.Edit ? 'edit' : 'reply');
+    const expectedAction: string = this.route.mode === ForumComposerMode.Edit ? 'edit' : 'reply';
     return [
       '(() => {',
       '  const expectedAction = ' + JSON.stringify(expectedAction) + ';',
@@ -2529,6 +2706,9 @@ export struct ForumComposerPage {
   }
 
   private getSubmissionResultScript(submissionSequence: number): string {
+    if (this.route.mode === ForumComposerMode.NewThread) {
+      return buildFourD4yNewThreadResultReadScript(submissionSequence);
+    }
     const mode: string = JSON.stringify(this.route.mode);
     const threadId: string = JSON.stringify(this.route.threadId);
     return [

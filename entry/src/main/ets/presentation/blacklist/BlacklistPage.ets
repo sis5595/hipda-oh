@@ -50,6 +50,7 @@ export struct BlacklistPage {
   private mutationTimeoutId: number = -1;
   private verificationTimeoutId: number = -1;
   private readonly timeoutMillis: number = 30000;
+  private promptForSuggestedUser: boolean = false;
 
   aboutToDisappear(): void {
     this.loadSequence += 1;
@@ -303,6 +304,7 @@ export struct BlacklistPage {
     this.entries = [];
     this.draftUserName = route === undefined || route === null ? '' :
       normalizeFourD4yBlacklistUserName(route.suggestedUserName);
+    this.promptForSuggestedUser = route !== undefined && route !== null && route.promptForSuggestedUser;
     this.statusMessage = '';
     this.hasMutationToken = false;
     this.hasRemovalControl = false;
@@ -423,6 +425,14 @@ export struct BlacklistPage {
         return;
       }
       this.finishLoad(expectedSequence);
+      if (this.promptForSuggestedUser && isValidFourD4yBlacklistUserName(this.draftUserName)) {
+        this.promptForSuggestedUser = false;
+        if (this.entries.some((entry: FourD4yBlacklistEntry) => entry.userName === this.draftUserName)) {
+          this.requestRemoval(this.draftUserName);
+        } else {
+          this.requestAdd();
+        }
+      }
     } catch (_error) {
       if (expectedSequence === this.loadSequence && !this.isLoadTerminal(expectedSequence)) {
         this.failLoad(expectedSequence, '暂时无法读取服务器黑名单，请检查网络后重试。');
