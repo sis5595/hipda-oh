@@ -51,6 +51,7 @@ export interface FourD4yFavoriteVerificationPayload {
   threadId: string;
   operationSequence: number;
   page: number;
+  lastPage: number;
   accessState: FourD4yPageAccessState;
   hasChallenge: boolean;
   formFound: boolean;
@@ -131,7 +132,8 @@ export function parseFourD4yFavoriteVerificationPayload(rawResult: string): Four
     const payload: FourD4yFavoriteVerificationPayload =
       JSON.parse(payloadText) as FourD4yFavoriteVerificationPayload;
     if (!isDigitsOnly(payload.threadId) || typeof payload.operationSequence !== 'number' ||
-      !isPositiveInteger(payload.page) || !isFourD4yPageAccessState(payload.accessState) ||
+      !isPositiveInteger(payload.page) || !isPositiveInteger(payload.lastPage) || payload.lastPage < payload.page ||
+      !isFourD4yPageAccessState(payload.accessState) ||
       typeof payload.hasChallenge !== 'boolean' || typeof payload.formFound !== 'boolean' ||
       typeof payload.favoritePresent !== 'boolean' || typeof payload.errorMessage !== 'string') {
       return null;
@@ -194,10 +196,16 @@ export function isAllowedFourD4yFavoriteOperationUrl(url: string, threadId: stri
  * the mutation, while the later favorites-form readback remains authoritative.
  */
 export function buildFourD4yFavoriteAddUrl(threadId: string): string {
+  return buildFourD4yFavoriteOperationUrl(threadId, false);
+}
+
+/** NG selects add/remove from its server-confirmed favorite mirror. */
+export function buildFourD4yFavoriteOperationUrl(threadId: string, isFavorite: boolean): string {
   if (!isDigitsOnly(threadId)) {
     return '';
   }
-  return 'https://www.4d4y.com/forum/my.php?item=favorites&action=add&inajax=1&ajaxtarget=favorite_msg&tid=' +
+  return 'https://www.4d4y.com/forum/my.php?item=favorites&action=' + (isFavorite ? 'remove' : 'add') +
+    '&inajax=1&ajaxtarget=favorite_msg&tid=' +
     threadId;
 }
 

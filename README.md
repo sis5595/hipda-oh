@@ -1,67 +1,41 @@
 # HiPDA·OH
 
-HiPDA·OH is a native HarmonyOS 6 client for the 4D4Y single-forum service.
-It is built for current HarmonyOS devices and is validated on a Mate 60.
+一个原生鸿蒙版的 **4D4Y 非官方客户端**，希望把 HiPDA·NG 熟悉、顺手的论坛体验带到鸿蒙手机上。
 
-> Current repository status: private pre-release development. It is not an
-> official 4D4Y product and is not yet an AppGallery release.
+本项目以 NG 为主要参考，尽量对齐它的界面布局、操作习惯和日常功能，并结合鸿蒙系统做适当调整。它由社区爱好者维护，与 4D4Y 官方没有隶属关系。
 
-## What is implemented
+## 当前状态
 
-- Forum browsing, pagination, pull-to-refresh, infinite loading, sorting, and pinned-thread visibility.
-- Login through the forum's current web flow, plus multi-account switching.
-- Thread reading, quote-floor navigation, attachments, images, original-image viewing, saving, sharing, zooming, and multi-image swiping.
-- Quick reply, advanced reply, image upload, publishing, editing, and deleting the current user's posts where the forum permits it.
-- Search, favourites, follows, blacklist, votes, messages, reminders, browsing history, and account settings.
-- A native ArkUI interface designed against verified HiPDA NG interaction behaviour while using HarmonyOS-appropriate implementations.
+**1.0.0-beta.1 · 测试版**
 
-The live forum remains the source of truth for permissions, forms, page structure,
-and success/failure feedback. The app does not invent server-side protocol behaviour.
-Authentication begins in the forum's ArkWeb flow. Where a feature requires native
-transport (for example search, message lists, or image loading), it uses only the
-current authenticated forum session for allowlisted 4D4Y endpoints; raw session
-values are never written to logs, history, or exported data.
+主要日常功能已实现，并在 Mate 60 上完成了一轮回归测试。仍欢迎在实际使用中反馈问题，尤其是论坛页面变化或与 NG 体验不一致的地方。
 
-## Build locally
+当前提供源码，尚未提供面向所有设备的通用安装包，也未上架应用商店。具备开发环境的用户可参考[构建说明](docs/BUILD.md)自行编译和签名安装。
 
-Requirements:
+当前构建面向 HarmonyOS 6.1.1 及以上的原生鸿蒙设备，不适用于 Android。
 
-- DevEco Studio and the matching HarmonyOS 6 SDK/toolchain.
-- A local signing configuration created for your own account/device.
+## 可以做什么
 
-Steps:
+- 浏览版面和帖子，下拉刷新、滚动加载，调整排序和置顶帖显示。
+- 阅读引用并跳转楼层，查看原图、缩放和切换多图，保存或分享图片，下载附件。
+- 发主题、快速回复、引用回复、上传多图，以及编辑或删除自己的帖子。
+- 搜索标题、全文和作者，查看自己的主题与回复，管理收藏、关注和黑名单。
+- 收发私信、查看帖子提醒，切换多个账号，调整主题、字号和行距。
 
-1. Copy `build-profile.example.json5` to `build-profile.json5`.
-2. In DevEco Studio, open **File > Project Structure > Signing Configs** and create/select a local signing configuration for the `default` product.
-3. Run the unit tests and package the application with the `hvigorw` supplied
-   by your DevEco installation. On Windows, for example:
+各项操作仍受论坛规则和账号权限限制。消息提醒显示在应用内，目前不提供后台系统推送。
 
-   ```powershell
-   $devEcoHvigor = 'C:\Program Files\DevEco Studio\tools\hvigor\bin\hvigorw.bat'
-   & $devEcoHvigor test
-   & $devEcoHvigor assembleHap
-   ```
+## 隐私与反馈
 
-   Alternatively, build the `default` product from DevEco Studio after local
-   signing has been configured.
+应用没有广告和统计 SDK。登录在论坛页面完成，已保存账号的会话由鸿蒙系统安全存储保护；具体说明见[隐私政策](docs/PRIVACY_POLICY.md)。
 
-`build-profile.json5`, certificates, provisioning files, keystores, generated HAPs,
-and local reference projects are intentionally ignored by Git. Never commit them.
+遇到问题可在 [Issues](https://github.com/sis5595/hipda-oh/issues) 中反馈，说明操作步骤、手机型号和系统版本。截图前请遮住私信、账号等个人信息。联系邮箱：sis5595@hotmail.com。
 
-## License and notices
+## 致谢
 
-The project source is licensed under [GPL-3.0-or-later](LICENSE). The interface
-uses a small set of Google Material Icons under Apache-2.0; see
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+特别感谢 **[HiPDA·NG](https://github.com/GreenSkinMonster/hipda)** 的作者与贡献者。NG 多年积累的界面设计、功能和论坛适配经验，是本项目最重要的参考，也奠定了本项目希望对齐的使用体验。
 
-HiPDA NG, MY 4D4Y, and Re:Source were used only as behaviour and compatibility
-references during development. Their source code and assets are not included in
-this repository.
+感谢 MY 4D4Y、[Re:Source](https://github.com/kenischu/ReSource) 等论坛客户端带来的参考，以及鸿蒙和 OpenHarmony 开发者社区分享的经验。内部界面图标采用 [Google Material Icons](https://github.com/google/material-design-icons)。
 
-## Before distributing a build
+## 开源协议
 
-This private development repository does not substitute for a release review.
-The remaining local and AppGallery checks are tracked in
-[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md), including the
-real-device privacy-consent verification, final region availability check, and
-externally accessible policy URL required before any public distribution.
+本项目采用 [GPL-3.0-or-later](LICENSE)。第三方素材的来源与许可见[第三方声明](THIRD_PARTY_NOTICES.md)。

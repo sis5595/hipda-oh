@@ -18,7 +18,17 @@ repository is https://github.com/google/material-design-icons.
 The icons are used for their established action semantics only. They are not
 copied from the GPL-licensed HiPDA NG project.
 
-## Reference projects not distributed here
+## Application artwork
+
+The application icon and launch artwork were supplied by the project maintainer
+for HiPDA·OH and are distributed under this project's GPL-3.0-or-later licence.
+They are not the HiPDA NG application icon.
+
+## Acknowledgements and reference projects
+
+Special thanks to [HiPDA NG](https://github.com/GreenSkinMonster/hipda) and its
+contributors. Its interface, interaction design and forum compatibility experience
+are the principal references for HiPDA·OH.
 
 HiPDA NG, MY 4D4Y, and Re:Source were inspected for product behaviour and
 forum compatibility during development. Their source code, binaries, artwork,

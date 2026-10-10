@@ -10,6 +10,15 @@ export struct PrivacyPolicyPage {
   private pathStack: NavPathStack = new NavPathStack();
   @State statusMessage: string = '';
   @State isWithdrawing: boolean = false;
+  private isPrivacyPageAlive: boolean = false;
+
+  aboutToAppear(): void {
+    this.isPrivacyPageAlive = true;
+  }
+
+  aboutToDisappear(): void {
+    this.isPrivacyPageAlive = false;
+  }
 
   build() {
     NavDestination() {
@@ -62,10 +71,14 @@ export struct PrivacyPolicyPage {
       .backgroundColor($r('app.color.canvas'))
     }
     .title('隐私政策')
+    .hideBackButton(this.isWithdrawing)
     .onReady((context: NavDestinationContext) => {
       this.pathStack = context.pathStack;
     })
     .onBackPressed((): boolean => {
+      if (this.isWithdrawing) {
+        return true;
+      }
       this.pathStack.pop();
       return true;
     });
@@ -90,7 +103,7 @@ export struct PrivacyPolicyPage {
   }
 
   private async withdrawConsent(): Promise<void> {
-    if (this.isWithdrawing) {
+    if (!this.isPrivacyPageAlive || this.isWithdrawing) {
       return;
     }
     this.statusMessage = '';
@@ -99,13 +112,21 @@ export struct PrivacyPolicyPage {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
       const withdrawn: boolean = await FourD4yPrivacyConsentStore.withdrawConsent(context);
       if (!withdrawn) {
+        if (!this.isPrivacyPageAlive) {
+          return;
+        }
         this.statusMessage = '撤回失败，请稍后重试。';
         this.isWithdrawing = false;
         return;
       }
+      // Remove old forum destinations before the consent gate destroys Navigation.
+      // A subsequent acceptance starts at Home, not a retained settings/private route.
+      this.pathStack.clear();
       AppStorage.set<boolean>('hipdaoh_privacy_accepted', false);
-      this.pathStack.pop();
     } catch (_error) {
+      if (!this.isPrivacyPageAlive) {
+        return;
+      }
       this.statusMessage = '撤回失败，请稍后重试。';
       this.isWithdrawing = false;
     }

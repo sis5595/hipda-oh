@@ -1,5 +1,6 @@
 import { asset } from '@kit.AssetStoreKit';
 import { util } from '@kit.ArkTS';
+import { BusinessError } from '@kit.BasicServicesKit';
 
 /**
  * Encrypted storage for an already authenticated 4D4Y session snapshot.
@@ -32,6 +33,11 @@ export class FourD4yAccountSessionStore {
       await asset.add(attributes);
       return true;
     } catch (_addError) {
+      // Only an existing alias permits replacement. A locked/unavailable
+      // service is not evidence that an asset already exists.
+      if ((_addError as BusinessError).code !== 24000003) {
+        return false;
+      }
       try {
         const query: asset.AssetMap = new Map();
         query.set(asset.Tag.ALIAS, alias);
@@ -66,7 +72,7 @@ export class FourD4yAccountSessionStore {
         return null;
       }
       const value: string = FourD4yAccountSessionStore.decoder.decodeToString(secret);
-      return value.length > 0 && value.length <= 900 ? value : null;
+      return value.length > 0 ? value : null;
     } catch (_error) {
       return null;
     }
@@ -84,7 +90,7 @@ export class FourD4yAccountSessionStore {
       return true;
     } catch (_error) {
       // Removing an already absent secret has the same desired end state.
-      return true;
+      return (_error as BusinessError).code === 24000002;
     }
   }
 

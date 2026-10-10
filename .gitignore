@@ -22,6 +22,22 @@
 /background.png
 /foreground.png
 
+# Private development records and release working notes stay local.
+/DEVELOPMENT_STATUS.md
+/docs/RELEASE_CHECKLIST.md
+/docs/private/
+*.bundle
+*.patch
+*.hprof
+*.heapsnapshot
+*.har
+*.pcap
+*.pcapng
+*.pem
+*.key
+/.env
+/.env.*
+
 # OS/editor leftovers
 .DS_Store
 Thumbs.db

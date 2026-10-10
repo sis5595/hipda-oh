@@ -1,6 +1,6 @@
 /** Content shared by the first-run consent screen and the in-app policy page. */
 export const FOUR_D4Y_PRIVACY_POLICY_TITLE: string = 'HiPDA·OH 隐私政策';
-export const FOUR_D4Y_PRIVACY_POLICY_UPDATED_AT: string = '2026 年 9 月 20 日';
+export const FOUR_D4Y_PRIVACY_POLICY_UPDATED_AT: string = '2026 年 10 月 10 日';
 export const FOUR_D4Y_PRIVACY_CONTACT: string = 'sis5595@hotmail.com';
 
 export interface FourD4yPrivacyPolicySection {
@@ -21,8 +21,12 @@ export const FOUR_D4Y_PRIVACY_POLICY_SECTIONS: FourD4yPrivacyPolicySection[] = [
       '私信和附件信息。\n（2）登录会话：你在内嵌论坛网页中登录后，应用会使用当前论坛会话完成你主动发起的' +
       '已登录操作；如你选择保存帐号，会话快照仅保存在设备的系统 Asset Store 加密存储中，用于帐号切换。' +
       '应用不接触或保存论坛密码。\n（3）本地偏好与浏览记录：主题样式、字号、图片加载偏好、快捷版面、' +
-      '上次浏览版面及阅读历史仅保存在本机，用于恢复界面和阅读进度。\n（4）你主动选择的图片：仅在你选择' +
-      '图片并确认上传/插入时，应用通过系统 Picker 读取被选择的图片并上传至 4D4Y。'
+      '上次浏览版面及阅读历史仅保存在本机，用于恢复界面和阅读进度。收藏/关注状态缓存按论坛 UID 隔离，' +
+      '每类最多保存 300 个数字主题 ID，用于重启后恢复按钮状态，不保存帖子正文或私信内容。\n（4）你主动选择的图片：仅在你选择' +
+      '图片并确认上传/插入时，应用通过系统 Picker 读取被选择的图片并上传至 4D4Y。' +
+      '\n（5）帖子外链图片：显示时可能访问对应图片服务器，不向外链服务器发送论坛 Cookie。查看普通外链动图时，' +
+      '应用为校验后继续播放在本机缓存临时文件；切图或退出查看器时删除，异常退出遗留文件在后续打开动图时清理。' +
+      '未主动保存时不会写入系统相册。'
   },
   {
     title: '三、权限、网络与共享',
@@ -36,7 +40,8 @@ export const FOUR_D4Y_PRIVACY_POLICY_SECTIONS: FourD4yPrivacyPolicySection[] = [
     content: '本地偏好、阅读历史和已保存帐号会话存储在你的设备上。已保存帐号会话使用 HarmonyOS Asset Store' +
       '加密保护；其余本地偏好不包含密码或原始会话 Cookie。阅读历史会保留至你在应用内清空或卸载应用；' +
       '显示偏好会保留至你更改、清除应用数据或卸载应用；已保存帐号会话会保留至你移除该帐号、清除应用数据' +
-      '或卸载应用。论坛服务器侧的数据保存规则由 4D4Y 论坛运营方决定。'
+      '或卸载应用。收藏/关注 ID 缓存会随已确认操作更新，保留至缓存替换、清除应用数据或卸载应用；切换帐号' +
+      '不会将缓存分享给其他帐号。论坛服务器侧的数据保存规则由 4D4Y 论坛运营方决定。'
   },
   {
     title: '五、你的权利与控制方式',

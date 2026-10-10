@@ -10,6 +10,11 @@ import { FourD4yAttentionState } from '../../domain/attention/FourD4yAttentionSt
 import { FourD4yBlacklistState } from '../../domain/blacklist/FourD4yBlacklistState';
 import { FourD4yFavoriteState } from '../../domain/favorite/FourD4yFavoriteState';
 import { FourD4yUnreadState } from '../../domain/notice/FourD4yUnreadState';
+import { LoginRouteParams } from '../login/LoginRouteState';
+
+class AccountPagePopResult {
+  changed: boolean = true;
+}
 
 /**
  * A maximum-four-account picker inspired by NG's interaction model. Unlike
@@ -29,9 +34,17 @@ export struct AccountPage {
   @State isLoading: boolean = true;
   @State isSwitching: boolean = false;
   @State statusMessage: string = '';
+  private isAccountPageAlive: boolean = false;
+  private registryLoadSequence: number = 0;
 
   aboutToAppear(): void {
+    this.isAccountPageAlive = true;
     void this.loadRegistry();
+  }
+
+  aboutToDisappear(): void {
+    this.isAccountPageAlive = false;
+    this.registryLoadSequence += 1;
   }
 
   build() {
@@ -61,6 +74,18 @@ export struct AccountPage {
       .backgroundColor($r('app.color.canvas'))
     }
     .title('账号管理')
+    // The live session is global. Do not leave halfway through replacing it,
+    // before the mirrors are reset and the verification page has been opened.
+    .hideBackButton(this.isSwitching)
+    .onBackPressed(() => this.closeAccountPage())
+  }
+
+  private closeAccountPage(): boolean {
+    if (!this.isSwitching) {
+      // Native Back without a result does not invoke the caller's onPop.
+      this.pathStack.pop(new AccountPagePopResult());
+    }
+    return true;
   }
 
   @Builder
@@ -208,54 +233,102 @@ export struct AccountPage {
   }
 
   private async loadRegistry(): Promise<void> {
+    if (!this.isAccountPageAlive) {
+      return;
+    }
+    const sequence: number = ++this.registryLoadSequence;
     this.isLoading = true;
     try {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
-      this.registry = await FourD4yAccountProfileStore.load(context);
+      const registry: FourD4yAccountRegistry = await FourD4yAccountProfileStore.load(context);
+      if (this.isAccountPageAlive && sequence === this.registryLoadSequence) {
+        this.registry = registry;
+      }
     } catch (_error) {
-      this.registry = createDefaultFourD4yAccountRegistry();
-      this.statusMessage = '读取账号列表失败，请重试。';
+      if (this.isAccountPageAlive && sequence === this.registryLoadSequence) {
+        this.statusMessage = '读取账号列表失败，请重试。';
+      }
+    } finally {
+      if (this.isAccountPageAlive && sequence === this.registryLoadSequence) {
+        this.isLoading = false;
+      }
     }
-    this.isLoading = false;
   }
 
   private async startNewAccountLogin(): Promise<void> {
+    if (!this.isAccountPageAlive || this.isSwitching) {
+      return;
+    }
     this.isSwitching = true;
     this.statusMessage = '';
     try {
+      await FourD4yAccountService.forgetStartupSelection(this.getUIContext().getHostContext() as common.Context);
       await FourD4ySession.clearPersistentAuthentication();
       this.clearAccountScopedMirrors();
       this.isLoggedIn = false;
       this.accountState.markSessionChanged();
+      if (!this.isAccountPageAlive) {
+        return;
+      }
       this.pathStack.pushPathByName('Login', null, (_result: PopInfo) => {
+        if (!this.isAccountPageAlive) {
+          return;
+        }
         this.isSwitching = false;
         void this.loadRegistry();
       });
     } catch (_error) {
-      this.isSwitching = false;
-      this.statusMessage = '无法准备新账号登录，当前会话没有被切换。';
+      if (this.isAccountPageAlive) {
+        this.isSwitching = false;
+        this.statusMessage = '无法准备新账号登录，当前会话没有被切换。';
+      }
     }
   }
 
   private async switchToAccount(profile: FourD4yAccountProfile): Promise<void> {
+    if (!this.isAccountPageAlive || this.isSwitching) {
+      return;
+    }
     this.isSwitching = true;
     this.statusMessage = '';
-    const restored: boolean = await FourD4yAccountService.activateSavedSession(profile.id);
+    let restored: boolean;
+    try {
+      restored = await FourD4yAccountService.activateSavedSession(profile.id,
+        () => this.isAccountPageAlive && this.isSwitching);
+    } catch (_error) {
+      if (this.isAccountPageAlive) {
+        this.isSwitching = false;
+        this.statusMessage = '恢复安全会话失败，请重试；尚未校验登录身份。';
+      }
+      return;
+    }
     if (!restored) {
-      this.isSwitching = false;
-      this.statusMessage = '无法恢复该账号的安全会话；它可能已失效，请选择“登录新账号”重新登录。';
+      if (this.isAccountPageAlive) {
+        this.isSwitching = false;
+        this.statusMessage = '无法恢复该账号的安全会话；它可能已失效，请选择“登录新账号”重新登录。';
+      }
       return;
     }
     this.clearAccountScopedMirrors();
     this.isLoggedIn = false;
     this.accountState.markSessionChanged();
-    this.pathStack.pushPathByName('Login', null, (_result: PopInfo) => {
+    if (!this.isAccountPageAlive) {
+      return;
+    }
+    const route: LoginRouteParams = { expectedUserId: profile.userId };
+    this.pathStack.pushPathByName('Login', route, (_result: PopInfo) => {
+      if (!this.isAccountPageAlive) {
+        return;
+      }
       this.isSwitching = false;
       void this.loadRegistry();
     });
   }
 
   private confirmRemove(profile: FourD4yAccountProfile): void {
+    if (!this.isAccountPageAlive || this.isSwitching) {
+      return;
+    }
     this.getUIContext().showAlertDialog({
       title: '移除账号',
       message: '移除“' + profile.displayName + '”的本机安全会话？不会影响 4D4Y 网站账号。',
@@ -265,7 +338,7 @@ export struct AccountPage {
   }
 
   private async removeAccount(profile: FourD4yAccountProfile): Promise<void> {
-    if (this.isSwitching) {
+    if (!this.isAccountPageAlive || this.isSwitching) {
       return;
     }
     this.isSwitching = true;
@@ -274,24 +347,29 @@ export struct AccountPage {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
       const removingActiveProfile: boolean = this.registry.activeProfileId === profile.id;
       const next: FourD4yAccountRegistry = removeFourD4yAccountProfile(this.registry, profile.id);
-      if (!await FourD4yAccountProfileStore.save(context, next)) {
-        this.statusMessage = '移除账号失败，账号列表未改变。';
-        this.isSwitching = false;
+      // Keep the row available for retry until both secret and live session
+      // removal have succeeded. Never orphan a secret by removing its row first.
+      if (!await FourD4yAccountSessionStore.remove(profile.id)) {
+        this.statusMessage = '移除安全会话失败，账号仍保留，请解锁手机后重试。';
         return;
       }
-      await FourD4yAccountSessionStore.remove(profile.id);
-      this.registry = next;
-      if (removingActiveProfile && this.isLoggedIn) {
+      if (removingActiveProfile) {
         await FourD4ySession.clearPersistentAuthentication();
         this.clearAccountScopedMirrors();
         this.isLoggedIn = false;
         this.accountState.markSessionChanged();
       }
+      if (!await FourD4yAccountProfileStore.save(context, next)) {
+        this.statusMessage = '安全会话已移除，但账号列表保存失败，请再次移除以完成清理。';
+        return;
+      }
+      this.registry = next;
       this.statusMessage = '已移除该账号的本机安全会话。';
     } catch (_error) {
       this.statusMessage = '移除账号失败，请重试。';
+    } finally {
+      this.isSwitching = false;
     }
-    this.isSwitching = false;
   }
 
   private clearAccountScopedMirrors(): void {

@@ -10,7 +10,7 @@ export interface FourD4ySearchHistoryEntry {
 export const FOUR_D4Y_SEARCH_HISTORY_LIMIT: number = 12;
 
 export function parseFourD4ySearchHistory(rawValue: string): FourD4ySearchHistoryEntry[] {
-  if (rawValue.length === 0) {
+  if (typeof rawValue !== 'string' || rawValue.length === 0 || rawValue.length > 16384) {
     return [];
   }
   try {
@@ -23,7 +23,7 @@ export function parseFourD4ySearchHistory(rawValue: string): FourD4ySearchHistor
       index += 1) {
       const entry: FourD4ySearchHistoryEntry = source[index];
       if (!isValidHistoryEntry(entry) || result.some((item: FourD4ySearchHistoryEntry) =>
-        item.keyword === entry.keyword && item.mode === entry.mode && item.forumId === entry.forumId)) {
+        item.keyword === entry.keyword.trim() && item.mode === entry.mode && item.forumId === entry.forumId)) {
         continue;
       }
       result.push({ keyword: entry.keyword.trim(), mode: entry.mode, forumId: entry.forumId });
@@ -55,8 +55,8 @@ export function addFourD4ySearchHistoryEntry(entries: FourD4ySearchHistoryEntry[
 }
 
 function isValidHistoryEntry(entry: FourD4ySearchHistoryEntry): boolean {
-  return entry !== null && typeof entry.keyword === 'string' && entry.keyword.trim().length > 0 &&
+  return entry !== null && typeof entry === 'object' && typeof entry.keyword === 'string' && entry.keyword.trim().length > 0 &&
     entry.keyword.trim().length <= 120 && (entry.mode === FourD4ySearchMode.Title ||
     entry.mode === FourD4ySearchMode.FullText || entry.mode === FourD4ySearchMode.Author) &&
-    (entry.forumId === 'all' || /^\d+$/.test(entry.forumId));
+    typeof entry.forumId === 'string' && (entry.forumId === 'all' || /^\d{1,20}$/.test(entry.forumId));
 }

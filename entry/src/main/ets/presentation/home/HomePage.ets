@@ -1,9 +1,12 @@
 import { ForumSummary, ThreadSummary } from '../../domain/model/ForumModels';
+import { FourD4yRowVersions } from '../common/FourD4yRowVersions';
+import { buildFourD4yEmptyForumScript, buildFourD4yForumFilterQuery, buildFourD4yForumNavigationScript, retainSelectedFourD4yForumType } from '../../domain/reader/FourD4yForumFilter';
 import { FourD4yPageAccessState, FourD4yReaderOutcome, ForumNewThreadPreflightPayload, ForumThreadType, ForumWebPayload, getForumReaderOutcome, isCurrentFourD4yWebRequest, isExpectedForumNewThreadPreflightPayload, isExpectedForumWebPayload, isReadyForumNewThreadForm, parseForumNewThreadPreflightPayload, parseForumWebPayload, WebThreadSummary } from '../../domain/reader/FourD4yReaderContracts';
 import { webview } from '@kit.ArkWeb';
 import { FourD4ySession } from '../../data/remote/FourD4ySession';
 import { createThreadRouteParams } from '../thread/ThreadRouteState';
-import { createNewThreadComposerRouteParams } from '../composer/ForumComposerRouteState';
+import { createNewThreadComposerRouteParams, ForumComposerThreadPublishedResult,
+  isForumComposerThreadPublishedResult } from '../composer/ForumComposerRouteState';
 import { FOUR_D4Y_FORUM_GROUPS, FOUR_D4Y_QUICK_FORUM_IDS, FourD4yForumGroup, getFourD4yForums } from '../../domain/catalog/FourD4yForumCatalog';
 import { FourD4yUserSettingsStore } from '../../data/local/FourD4yUserSettingsStore';
 import { common } from '@kit.AbilityKit';
@@ -28,6 +31,7 @@ import { resolveFourD4yHomeForumId } from '../../domain/navigation/FourD4yHomeFo
 import { isQualifiedFourD4yRightSwipe } from '../../domain/navigation/FourD4yHorizontalGesture';
 import { formatFourD4yThreadCount, formatFourD4yThreadCreatedDate } from '../../domain/thread/FourD4yThreadDate';
 import { FourD4yObservedReplyCounts } from '../../domain/thread/FourD4yObservedReplyCounts';
+import { FourD4yThreadDeletionEvent, FourD4yThreadMutationState } from '../../domain/thread/FourD4yThreadMutationState';
 
 enum HomeAppearanceSheetMode {
   Typography = 'typography',
@@ -42,8 +46,12 @@ export struct HomePage {
   @State activeTab: number = 0;
   @State selectedForumIndex: number = 0;
   @State threads: ThreadSummary[] = [];
+  private readonly threadRowVersions: FourD4yRowVersions<ThreadSummary> =
+    new FourD4yRowVersions<ThreadSummary>((thread: ThreadSummary): string => thread.id);
   /** Types from the active board's top-level `.threadtype` navigation. */
   @State currentForumThreadTypes: ForumThreadType[] = [];
+  @State selectedForumTypeId: string = '';
+  @State selectedForumTypeLabel: string = '';
   @State currentForumPage: number = 1;
   @State nextForumPage: number = 0;
   @State isLoading: boolean = false;
@@ -76,6 +84,7 @@ export struct HomePage {
   @Consume('unreadState') unreadState: FourD4yUnreadState;
   @Consume('observedReplyCounts') observedReplyCounts: FourD4yObservedReplyCounts;
   @Consume('accountState') accountState: FourD4yAccountState;
+  @Consume('threadMutationState') threadMutationState: FourD4yThreadMutationState;
   @State observedReplyCountRevision: number = 0;
   @State privateMessageUnreadCount: number = 0;
   @State informationReminderUnreadCount: number = 0;
@@ -112,20 +121,31 @@ export struct HomePage {
   private isUnreadPromptLoading: boolean = false;
   private unreadStateListenerId: number = -1;
   private observedReplyCountListenerId: number = -1;
+  private threadDeletionListenerId: number = -1;
   private lastObservedForegroundGeneration: number = 0;
+  private isHomeAlive: boolean = false;
 
   aboutToAppear(): void {
+    this.isHomeAlive = true;
     webview.WebviewController.setWebDebuggingAccess(false);
     this.subscribeUnreadState();
     this.subscribeObservedReplyCounts();
+    this.threadDeletionListenerId = this.threadMutationState.subscribeDeletion(
+      (event: FourD4yThreadDeletionEvent) => this.onConfirmedThreadDeletion(event));
     void this.restoreHomeSettingsAndLoadThreads();
     void this.restoreDrawerAccount();
     this.refreshLoginState();
   }
 
   aboutToDisappear(): void {
+    this.isHomeAlive = false;
+    this.webLoadSequence += 1;
+    this.topicPermissionProbeSequence += 1;
+    this.unreadPromptSequence += 1;
     this.unsubscribeUnreadState();
     this.unsubscribeObservedReplyCounts();
+    this.threadMutationState.unsubscribeDeletion(this.threadDeletionListenerId);
+    this.threadDeletionListenerId = -1;
     this.clearForumLoadWatchdog();
     this.clearTopicPermissionWatchdog();
   }
@@ -264,7 +284,8 @@ export struct HomePage {
         .onClick(() => {
           this.openMainDrawer();
         })
-      Text(this.forums[this.selectedForumIndex].name)
+      Text(this.forums[this.selectedForumIndex].name +
+        (this.selectedForumTypeLabel.length > 0 ? ' · ' + this.selectedForumTypeLabel : ''))
         .fontSize(20)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
@@ -272,6 +293,16 @@ export struct HomePage {
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .layoutWeight(1)
       Blank()
+      if (this.forums[this.selectedForumIndex].id === '6') {
+        Image($r('app.media.toolbar_filter'))
+          .width(42)
+          .height(42)
+          .padding(9)
+          .objectFit(ImageFit.Contain)
+          .fillColor(this.selectedForumTypeId.length > 0 ? $r('app.color.brand') : $r('app.color.text_detail'))
+          .accessibilityText('按分类筛选')
+          .bindMenu(this.buildForumTypeMenu())
+      }
       Image($r('app.media.toolbar_search'))
         .width(42)
         .height(42)
@@ -740,6 +771,16 @@ export struct HomePage {
           // scrolling surface so reach-end cannot race a nested Scroll.
           Refresh({ refreshing: $$this.isRefreshing, offset: 64, friction: 65 }) {
             List({ space: 0 }) {
+              if (this.threads.length === 0) {
+                ListItem() {
+                  Text(this.selectedForumTypeId.length > 0 ? '当前筛选下暂无主题' : '当前页暂无主题')
+                    .fontSize(15)
+                    .fontColor($r('app.color.text_quiet'))
+                    .width('100%')
+                    .textAlign(TextAlign.Center)
+                    .padding(28)
+                }
+              }
               ForEach(this.getVisibleThreads(), (thread: ThreadSummary) => {
                 ListItem() {
                   this.buildThreadItem(thread);
@@ -749,9 +790,9 @@ export struct HomePage {
                     return;
                   }
                   this.pathStack.pushPathByName('ThreadDetail',
-                    createThreadRouteParams(thread.id, thread.title, thread.replyCount, 1, 0, thread.forumId));
+                    createThreadRouteParams(thread.id, thread.title, this.displayReplyCount(thread), 1, 0, thread.forumId));
                 })
-              }, (thread: ThreadSummary) => thread.id)
+              }, (thread: ThreadSummary) => this.threadRowVersions.key(thread))
               ListItem() {
                 this.buildForumLoadFooter();
               }
@@ -991,6 +1032,56 @@ export struct HomePage {
   }
 
   @Builder
+  private buildForumTypeMenu() {
+    Menu() {
+      MenuItem(() => {
+        this.buildForumTypeMenuItem('全部分类', this.selectedForumTypeId.length === 0);
+      })
+        .onClick(() => this.selectForumType('', ''))
+      ForEach(this.currentForumThreadTypes, (type: ForumThreadType) => {
+        MenuItem(() => {
+          this.buildForumTypeMenuItem(type.label, this.selectedForumTypeId === type.value);
+        })
+          .onClick(() => this.selectForumType(type.value, type.label))
+      }, (type: ForumThreadType) => type.value)
+    }
+  }
+
+  private selectForumType(typeId: string, label: string): void {
+    if (!this.isHomeAlive || this.forums[this.selectedForumIndex].id !== '6' ||
+      typeId === this.selectedForumTypeId || (typeId.length > 0 &&
+        !this.currentForumThreadTypes.some((type: ForumThreadType): boolean => type.value === typeId))) {
+      return;
+    }
+    this.selectedForumTypeId = typeId;
+    this.selectedForumTypeLabel = label;
+    this.threads = this.threadRowVersions.track([]);
+    this.currentForumPage = 1;
+    this.nextForumPage = 0;
+    this.isRefreshing = false;
+    this.loadForumPage(1, false);
+  }
+
+  @Builder
+  private buildForumTypeMenuItem(label: string, selected: boolean) {
+    Row({ space: 10 }) {
+      Image(selected ? $r('app.media.menu_checkbox_checked') : $r('app.media.menu_checkbox_unchecked'))
+        .width(20)
+        .height(20)
+        .objectFit(ImageFit.Contain)
+      Text(label)
+        .fontSize(16)
+        .fontColor($r('app.color.text_primary'))
+        .layoutWeight(1)
+        .maxLines(2)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width(212)
+    .height(44)
+    .padding({ left: 12, right: 12 })
+  }
+
+  @Builder
   private buildHomeMenu() {
     Menu() {
       MenuItem(() => {
@@ -1000,8 +1091,10 @@ export struct HomePage {
           !this.isTopicPermissionProbePending && !this.isLoading && !this.isRefreshing && !this.isLoadingMore)
         .onClick(() => {
           const forum: ForumSummary = this.forums[this.selectedForumIndex];
+          const generation: number = this.accountState.getSessionGeneration();
           this.pathStack.pushPathByName('ForumComposer',
-            createNewThreadComposerRouteParams(forum.id, forum.name, this.currentForumThreadTypes));
+            createNewThreadComposerRouteParams(forum.id, forum.name, this.currentForumThreadTypes),
+            (popInfo: PopInfo) => this.onNewThreadComposerReturned(popInfo, forum.id, generation));
         })
       MenuItem(() => {
         this.buildHomeMenuTrailingToggle('按发表排序', this.isCurrentForumPostTimeSorted());
@@ -1128,9 +1221,15 @@ export struct HomePage {
     try {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
       const settings: FourD4yUserSettings = await FourD4yUserSettingsStore.load(context);
+      if (!this.isHomeAlive) {
+        return;
+      }
       this.drawerSettings = settings;
       this.quickForumIds = settings.quickForumIds;
     } catch (_error) {
+      if (!this.isHomeAlive) {
+        return;
+      }
       this.drawerSettings = createDefaultFourD4yUserSettings();
       this.quickForumIds = [...FOUR_D4Y_QUICK_FORUM_IDS];
     }
@@ -1138,12 +1237,18 @@ export struct HomePage {
 
   private async restoreHomeSettingsAndLoadThreads(): Promise<void> {
     await this.restoreQuickForums();
+    if (!this.isHomeAlive) {
+      return;
+    }
     let lastForumId: string = '';
     try {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
       lastForumId = await FourD4yLastForumStore.load(context);
     } catch (_error) {
       // The resolver below falls back to the user's first quick board.
+    }
+    if (!this.isHomeAlive) {
+      return;
     }
     this.restoreSelectedForum(lastForumId, this.quickForumIds);
     this.loadThreads();
@@ -1181,6 +1286,13 @@ export struct HomePage {
 
   private closeDrawerAndPush(routeName: string, routeParam: Object | null): void {
     this.isMainDrawerOpen = false;
+    if (routeName === 'Account') {
+      const sessionGeneration: number = this.accountState.getSessionGeneration();
+      this.pathStack.pushPathByName(routeName, routeParam, (_result: PopInfo) => {
+        this.refreshAfterAccountManagement(sessionGeneration);
+      });
+      return;
+    }
     if (routeName === 'MessageCenter') {
       this.pathStack.pushPathByName(routeName, routeParam, (_result: PopInfo) => {
         void this.refreshLoginState();
@@ -1188,6 +1300,25 @@ export struct HomePage {
       return;
     }
     this.pathStack.pushPathByName(routeName, routeParam);
+  }
+
+  private refreshAfterAccountManagement(previousGeneration: number): void {
+    if (!this.isHomeAlive) {
+      return;
+    }
+    const generation: number = this.accountState.getSessionGeneration();
+    if (generation !== previousGeneration) {
+      this.selectedForumTypeId = '';
+      this.selectedForumTypeLabel = '';
+      this.unreadPromptSequence += 1;
+      this.isUnreadPromptLoading = false;
+      this.observedReplyCounts.syncSession(generation);
+      // An account can see different boards, permissions and blacklist rows.
+      this.threads = this.threadRowVersions.track([]);
+      this.loadForumPage(1, false);
+    }
+    void this.restoreDrawerAccount();
+    void this.refreshLoginState();
   }
 
   private openAppearanceSheet(mode: HomeAppearanceSheetMode): void {
@@ -1198,7 +1329,7 @@ export struct HomePage {
   }
 
   private async saveDrawerSettings(nextSettings: FourD4yUserSettings): Promise<void> {
-    if (this.isAppearanceSaving) {
+    if (!this.isHomeAlive || this.isAppearanceSaving) {
       return;
     }
     const normalized: FourD4yUserSettings = normalizeFourD4yUserSettings(nextSettings);
@@ -1208,16 +1339,23 @@ export struct HomePage {
     this.appearanceStatus = '';
     try {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
-      const saved: boolean = await FourD4yUserSettingsStore.save(context, normalized);
-      if (!saved) {
+      const saved: FourD4yUserSettings | undefined = await FourD4yUserSettingsStore.save(context, normalized, previous);
+      if (!this.isHomeAlive) {
+        return;
+      }
+      if (saved === undefined) {
         this.drawerSettings = previous;
         this.appearanceStatus = '保存设置失败，请重试。';
         this.isAppearanceSaving = false;
         return;
       }
-      FourD4yUserSettingsStore.applyAppearance(context.getApplicationContext(), normalized);
-      this.quickForumIds = normalized.quickForumIds;
+      this.drawerSettings = saved;
+      FourD4yUserSettingsStore.applyAppearance(context.getApplicationContext(), saved);
+      this.quickForumIds = saved.quickForumIds;
     } catch (_error) {
+      if (!this.isHomeAlive) {
+        return;
+      }
       this.drawerSettings = previous;
       this.appearanceStatus = '保存设置失败，请重试。';
     }
@@ -1241,7 +1379,7 @@ export struct HomePage {
   }
 
   private async saveForumListSettings(nextSettings: FourD4yUserSettings, reloadForum: boolean): Promise<void> {
-    if (this.isForumListPreferenceSaving) {
+    if (!this.isHomeAlive || this.isForumListPreferenceSaving) {
       return;
     }
     const normalized: FourD4yUserSettings = normalizeFourD4yUserSettings(nextSettings);
@@ -1250,14 +1388,21 @@ export struct HomePage {
     this.isForumListPreferenceSaving = true;
     try {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
-      const saved: boolean = await FourD4yUserSettingsStore.save(context, normalized);
-      if (!saved) {
+      const saved: FourD4yUserSettings | undefined = await FourD4yUserSettingsStore.save(context, normalized, previous);
+      if (!this.isHomeAlive) {
+        return;
+      }
+      if (saved === undefined) {
         this.drawerSettings = previous;
         this.loadError = '保存列表显示设置失败，请重试。';
         this.isForumListPreferenceSaving = false;
         return;
       }
+      this.drawerSettings = saved;
     } catch (_error) {
+      if (!this.isHomeAlive) {
+        return;
+      }
       this.drawerSettings = previous;
       this.loadError = '保存列表显示设置失败，请重试。';
       this.isForumListPreferenceSaving = false;
@@ -1344,14 +1489,21 @@ export struct HomePage {
   }
 
   private async restoreDrawerAccount(): Promise<void> {
+    const sessionGeneration: number = this.accountState.getSessionGeneration();
     try {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
       const registry = await FourD4yAccountProfileStore.load(context);
+      if (!this.isHomeAlive || sessionGeneration !== this.accountState.getSessionGeneration()) {
+        return;
+      }
       const activeProfile: FourD4yAccountProfile | undefined = registry.profiles.find(
         (profile: FourD4yAccountProfile) => profile.id === registry.activeProfileId);
       this.drawerAccountName = activeProfile === undefined ? '' : activeProfile.displayName;
       this.drawerAccountUserId = activeProfile === undefined ? '' : activeProfile.userId;
     } catch (_error) {
+      if (!this.isHomeAlive || sessionGeneration !== this.accountState.getSessionGeneration()) {
+        return;
+      }
       this.drawerAccountName = '';
       this.drawerAccountUserId = '';
     }
@@ -1404,10 +1556,12 @@ export struct HomePage {
       return;
     }
     this.selectedForumIndex = nextIndex;
+    this.selectedForumTypeId = '';
+    this.selectedForumTypeLabel = '';
     void this.persistLastVisitedForum(forumId);
     // A board switch must never leave the old board's rows under the new
     // title while page 1 is loading.
-    this.threads = [];
+    this.threads = this.threadRowVersions.track([]);
     this.currentForumPage = 1;
     this.nextForumPage = 0;
     this.isLoading = false;
@@ -1415,6 +1569,32 @@ export struct HomePage {
     this.isLoadingMore = false;
     this.loadError = '';
     this.loadMoreError = '';
+    this.loadForumPage(1, false);
+  }
+
+  private onNewThreadComposerReturned(popInfo: PopInfo, forumId: string, generation: number): void {
+    if (!this.isHomeAlive || generation !== this.accountState.getSessionGeneration() ||
+      forumId !== this.forums[this.selectedForumIndex].id ||
+      !isForumComposerThreadPublishedResult(popInfo.result, forumId)) {
+      return;
+    }
+    const result: ForumComposerThreadPublishedResult = popInfo.result as ForumComposerThreadPublishedResult;
+    // Refresh only after confirmed publication. The editor has already left
+    // the stack, so Back from this reader cannot revive a submitted draft.
+    this.loadForumPage(1, false);
+    this.pathStack.pushPathByName('ThreadDetail',
+      createThreadRouteParams(result.threadId, result.title, 0, 1, 0, forumId));
+  }
+
+  private onConfirmedThreadDeletion(event: FourD4yThreadDeletionEvent): void {
+    if (!this.isHomeAlive || event.sessionGeneration !== this.accountState.getSessionGeneration() ||
+      event.forumId !== this.forums[this.selectedForumIndex].id) {
+      return;
+    }
+    // NG refreshes the matching board after confirmed first-post deletion.
+    // Supersede any older load so it cannot put the removed row back.
+    this.threads = this.threadRowVersions.track(
+      this.threads.filter((thread: ThreadSummary) => thread.id !== event.threadId));
     this.loadForumPage(1, false);
   }
 
@@ -1433,7 +1613,7 @@ export struct HomePage {
   }
 
   private loadForumPage(page: number, append: boolean): void {
-    if (!Number.isFinite(page) || page < 1) {
+    if (!this.isHomeAlive || !Number.isFinite(page) || page < 1) {
       return;
     }
     const requestedPage: number = Math.max(1, Math.floor(page));
@@ -1457,7 +1637,12 @@ export struct HomePage {
     }
     this.loadError = '';
     if (requestedPage === 1) {
-      this.currentForumThreadTypes = [];
+      // A filtered document renders the current type as plain text. Keep the
+      // same-board catalog until extraction can merge that selected entry.
+      // Board/account changes clear selectedForumTypeId before this call.
+      if (this.selectedForumTypeId.length === 0) {
+        this.currentForumThreadTypes = [];
+      }
       this.resetTopicPermissionProbe();
     }
     this.needsWebVerification = false;
@@ -1466,7 +1651,8 @@ export struct HomePage {
     this.startForumLoadWatchdog(this.webLoadSequence);
     const forum: ForumSummary = this.forums[this.selectedForumIndex];
     const orderByQuery: string = this.isCurrentForumPostTimeSorted() ? '&orderby=dateline' : '';
-    this.forumPageUrl = `https://www.4d4y.com/forum/forumdisplay.php?fid=${forum.id}&page=${requestedPage}${orderByQuery}&oh_load=${this.webLoadSequence}`;
+    const filterQuery: string = buildFourD4yForumFilterQuery(forum.id, this.selectedForumTypeId);
+    this.forumPageUrl = `https://www.4d4y.com/forum/forumdisplay.php?fid=${forum.id}&page=${requestedPage}${orderByQuery}${filterQuery}&oh_load=${this.webLoadSequence}`;
     if (!this.isForumWebControllerAttached) {
       return;
     }
@@ -1510,6 +1696,8 @@ export struct HomePage {
   private async readThreadsFromWeb(): Promise<void> {
     const expectedSequence: number = this.webLoadSequence;
     const expectedPage: number = this.requestedForumPage;
+    const expectedTypeId: string = this.selectedForumTypeId;
+    const expectedGeneration: number = this.accountState.getSessionGeneration();
     if (this.isForumLoadTerminal(expectedSequence)) {
       return;
     }
@@ -1524,25 +1712,7 @@ export struct HomePage {
           // 4D4Y leaves the new-topic form's select at its empty typeid=0
           // placeholder. The current board's visible top .threadtype menu
           // is the authoritative source of user-selectable category values.
-          const seenThreadTypeIds = new Set();
-          const threadTypes = [];
-          Array.from(document.querySelectorAll('div.threadtype a[href]')).forEach((link) => {
-            const href = link.getAttribute('href') || '';
-            try {
-              const typeUrl = new URL(href, location.href);
-              const typeId = typeUrl.searchParams.get('typeid') || '';
-              const label = toText(link);
-              if (typeUrl.pathname.indexOf('/forum/forumdisplay.php') < 0 ||
-                typeUrl.searchParams.get('fid') !== currentFid || !/^\\d+$/.test(typeId) || typeId === '0' ||
-                label.length === 0 || seenThreadTypeIds.has(typeId)) {
-                return;
-              }
-              seenThreadTypeIds.add(typeId);
-              threadTypes.push({ value: typeId, label: label.slice(0, 80) });
-            } catch (_error) {
-              // A malformed category URL cannot become a native submission value.
-            }
-          });
+          ${buildFourD4yForumNavigationScript()}
           const titleLinks = links.filter((link) => {
             const href = link.getAttribute('href') || '';
             return href.indexOf('viewthread.php') >= 0 && toText(link).length > 0;
@@ -1599,23 +1769,11 @@ export struct HomePage {
           });
           const forumRowCount = document.querySelectorAll('td.listcon').length;
           const legacyThreadRowCount = document.querySelectorAll('tbody[id^="normalthread_"]').length;
+          ${buildFourD4yEmptyForumScript()}
           const layout = forumRowCount > 0 ? 'mobile-listcon' :
-            (legacyThreadRowCount > 0 ? 'legacy-threadlist' : 'unrecognized');
+            (legacyThreadRowCount > 0 ? 'legacy-threadlist' : (hasEmptyForumTable ? 'legacy-empty' : 'unrecognized'));
           const page = Number.parseInt(params.get('page') || '1', 10) || 1;
-          const linkedPages = links.map((link) => {
-            const href = link.getAttribute('href') || '';
-            try {
-              const linkUrl = new URL(href, location.href);
-              if (linkUrl.pathname.indexOf('/forum/forumdisplay.php') < 0 ||
-                linkUrl.searchParams.get('fid') !== currentFid) {
-                return 0;
-              }
-              const linkedPage = Number.parseInt(linkUrl.searchParams.get('page') || '1', 10) || 1;
-              return linkedPage > 0 ? linkedPage : 0;
-            } catch (_error) {
-              return 0;
-            }
-          });
+          const linkedPages = links.map(linkedBoardPage);
           const nextPageCandidates = linkedPages.filter((linkedPage) => linkedPage > page);
           const nextPage = nextPageCandidates.length > 0 ? Math.min(...nextPageCandidates) : 0;
           const pageText = toText(document.body);
@@ -1623,12 +1781,14 @@ export struct HomePage {
           const accessState = loginForm && /(\u672a\u767b\u5f55|\u65e0\u6743)/.test(pageText) ? 'loginRequired' : 'available';
           return JSON.stringify({
             fid: params.get('fid') || '',
+            filterTypeId: filterTypeId,
             page: page,
             nextPage: nextPage,
             loadSequence: Number.parseInt(params.get('oh_load') || '0', 10) || 0,
             layout: layout,
             threadLinkCount: titleLinks.length,
             forumRowCount: forumRowCount,
+            hasEmptyForumTable: hasEmptyForumTable,
             accessState: accessState,
             hasChallenge: document.documentElement.innerHTML.indexOf('challenge-platform') >= 0 || document.documentElement.innerHTML.indexOf('cf-chl-') >= 0,
             threadTypes: threadTypes,
@@ -1646,8 +1806,9 @@ export struct HomePage {
         }
         return;
       }
-      if (expectedSequence !== this.webLoadSequence ||
-        !isExpectedForumWebPayload(payload, forum.id, expectedPage, expectedSequence)) {
+      if (!this.isHomeAlive || expectedGeneration !== this.accountState.getSessionGeneration() ||
+        expectedSequence !== this.webLoadSequence || expectedTypeId !== this.selectedForumTypeId ||
+        !isExpectedForumWebPayload(payload, forum.id, expectedPage, expectedSequence, expectedTypeId)) {
         return;
       }
       const readerOutcome: FourD4yReaderOutcome = getForumReaderOutcome(payload);
@@ -1669,7 +1830,8 @@ export struct HomePage {
       this.needsWebVerification = false;
       this.currentForumPage = payload.page;
       this.nextForumPage = payload.nextPage > payload.page ? payload.nextPage : 0;
-      this.currentForumThreadTypes = payload.threadTypes;
+      this.currentForumThreadTypes = retainSelectedFourD4yForumType(payload.threadTypes,
+        this.currentForumThreadTypes, expectedTypeId);
       const parsedThreads: ThreadSummary[] = payload.threads.map((thread: WebThreadSummary): ThreadSummary => ({
         id: thread.id,
         forumId: forum.id,
@@ -1682,8 +1844,9 @@ export struct HomePage {
         createdAt: thread.createdAt,
         isPinned: thread.isPinned
       }));
-      this.threads = this.isAppendingForumPage ? appendUniqueFourD4yForumThreads(this.threads, parsedThreads) :
-        parsedThreads;
+      this.observedReplyCounts.acceptBoardRows(parsedThreads.map((thread: ThreadSummary): string => thread.id));
+      this.threads = this.threadRowVersions.track(this.isAppendingForumPage ?
+        appendUniqueFourD4yForumThreads(this.threads, parsedThreads) : parsedThreads);
       this.finishForumLoad(expectedSequence);
       if (expectedPage === 1) {
         this.startTopicPermissionProbe(forum.id);
@@ -1836,7 +1999,7 @@ export struct HomePage {
   }
 
   private isCurrentForumRequest(url: string): boolean {
-    return isCurrentFourD4yWebRequest(url, '/forum/forumdisplay.php', this.webLoadSequence);
+    return this.isHomeAlive && isCurrentFourD4yWebRequest(url, '/forum/forumdisplay.php', this.webLoadSequence);
   }
 
   private isForumLoadTerminal(sequence: number = this.webLoadSequence): boolean {
@@ -1893,7 +2056,12 @@ export struct HomePage {
   }
 
   private async refreshLoginState(): Promise<void> {
-    this.isLoggedIn = await FourD4ySession.isLoggedIn();
+    const sessionGeneration: number = this.accountState.getSessionGeneration();
+    const loggedIn: boolean = await FourD4ySession.isLoggedIn();
+    if (!this.isHomeAlive || sessionGeneration !== this.accountState.getSessionGeneration()) {
+      return;
+    }
+    this.isLoggedIn = loggedIn;
     if (this.isLoggedIn) {
       void this.refreshUnreadPromptCounts();
     } else {
@@ -2014,15 +2182,19 @@ export struct HomePage {
   }
 
   private async refreshUnreadPromptCounts(): Promise<void> {
-    if (!this.isLoggedIn || this.isUnreadPromptLoading) {
+    if (!this.isHomeAlive || !this.isLoggedIn || this.isUnreadPromptLoading) {
       return;
     }
     const expectedSequence: number = this.unreadPromptSequence + 1;
+    const sessionGeneration: number = this.accountState.getSessionGeneration();
     this.unreadPromptSequence = expectedSequence;
     this.isUnreadPromptLoading = true;
+    const sharedRefresh: number = this.unreadState.beginRefresh();
     try {
       const result: FourD4yNativeMessagePromptResult = await this.messageClient.loadPrompt(expectedSequence);
-      if (this.unreadPromptSequence !== expectedSequence) {
+      if (this.unreadPromptSequence !== expectedSequence ||
+        !this.unreadState.isCurrentRefresh(sharedRefresh) ||
+        sessionGeneration !== this.accountState.getSessionGeneration()) {
         return;
       }
       if (result.status === 'cookie-missing' || result.status === 'server-login-required') {

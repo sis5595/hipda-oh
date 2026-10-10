@@ -23,8 +23,9 @@ export function countObservedLastPageReplies(posts: ThreadPost[], currentPage: n
   if (!Number.isInteger(lastPost.floor) || lastPost.floor < 1) {
     return undefined;
   }
-  for (let index: number = 1; index < posts.length; index += 1) {
-    if (posts[index].threadId !== lastPost.threadId || posts[index].floor <= posts[index - 1].floor) {
+  for (let index: number = 0; index < posts.length; index += 1) {
+    if (posts[index].threadId !== lastPost.threadId ||
+      (index > 0 && posts[index].floor <= posts[index - 1].floor)) {
       return undefined;
     }
   }
@@ -68,8 +69,22 @@ export class FourD4yObservedReplyCounts {
       now - observed.observedAt > this.maxAgeMillis) {
       return boardCount;
     }
-    // A newer board counter may have caught up or overtaken this snapshot.
-    return Math.max(boardCount, observed.count);
+    // Like NG's ThreadUpdatedEvent, replace the row rather than only raising
+    // it: deleting replies can make an authoritative last-page count smaller.
+    return observed.count;
+  }
+
+  /** A newly read board row replaces its old detail-derived snapshot (NG). */
+  acceptBoardRows(threadIds: string[]): void {
+    let changed: boolean = false;
+    threadIds.forEach((threadId: string) => {
+      if (this.counts.delete(threadId)) {
+        changed = true;
+      }
+    });
+    if (changed) {
+      this.listeners.forEach((listener: ReplyCountListener) => listener());
+    }
   }
 
   subscribe(listener: ReplyCountListener): number {

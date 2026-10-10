@@ -36,6 +36,27 @@ export interface ForumComposerPostEditedResult {
   postId: string;
 }
 
+/** New topics return to their originating board before opening the reader. */
+export interface ForumComposerThreadPublishedResult {
+  kind: 'threadPublished';
+  threadId: string;
+  forumId: string;
+  title: string;
+}
+
+export function createForumComposerThreadPublishedResult(threadId: string, forumId: string,
+  title: string): ForumComposerThreadPublishedResult {
+  return { kind: 'threadPublished', threadId: threadId, forumId: forumId, title: title };
+}
+
+export function isForumComposerThreadPublishedResult(value: Object, expectedForumId: string): boolean {
+  if (value === null || value === undefined) return false;
+  const result: ForumComposerThreadPublishedResult = value as ForumComposerThreadPublishedResult;
+  return result.kind === 'threadPublished' && result.forumId === expectedForumId &&
+    typeof result.threadId === 'string' && /^\d{1,20}$/.test(result.threadId) &&
+    typeof result.title === 'string';
+}
+
 export function createForumComposerReplyPublishedResult(threadId: string): ForumComposerReplyPublishedResult {
   return {
     kind: 'replyPublished',

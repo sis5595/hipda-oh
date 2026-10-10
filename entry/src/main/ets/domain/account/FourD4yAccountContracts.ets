@@ -141,6 +141,9 @@ export function removeFourD4yAccountProfile(registry: FourD4yAccountRegistry, pr
 }
 
 function normalizeFourD4yAccountProfile(value: Object): FourD4yAccountProfile | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
   const record: Record<string, Object> = value as Record<string, Object>;
   const id: string = typeof record['id'] === 'string' ? record['id'] : '';
   const userId: string = typeof record['userId'] === 'string' ? record['userId'] : '';

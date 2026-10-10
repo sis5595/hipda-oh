@@ -1,4 +1,6 @@
 import { webview } from '@kit.ArkWeb';
+import { common } from '@kit.AbilityKit';
+import { bindFourD4yCollectionCache } from '../common/FourD4yCollectionCacheBinding';
 import { FourD4ySession } from '../../data/remote/FourD4ySession';
 import { FourD4yAttentionMutationStartPayload, FourD4yAttentionPagePayload,
   FourD4yAttentionReaderOutcome, FourD4yAttentionThread, getFourD4yAttentionReaderOutcome,
@@ -7,7 +9,10 @@ import { FourD4yAttentionMutationStartPayload, FourD4yAttentionPagePayload,
   '../../domain/attention/FourD4yAttentionContracts';
 import { FourD4yPageAccessState } from '../../domain/reader/FourD4yReaderContracts';
 import { FourD4yAttentionState } from '../../domain/attention/FourD4yAttentionState';
+import { FourD4yCollectionSnapshotSource } from '../../domain/favorite/FourD4yCollectionCache';
 import { createThreadRouteParams } from '../thread/ThreadRouteState';
+import { FourD4yAccountState } from '../../domain/account/FourD4yAccountState';
+import { buildFourD4yCollectionPaginationScript } from '../../domain/favorite/FourD4yCollectionPagination';
 
 /**
  * Native view of the server-owned topic attention list. CSRF values remain
@@ -18,6 +23,7 @@ export struct AttentionPage {
   @Consume('pathStack') pathStack: NavPathStack;
   @Consume('authState') isLoggedIn: boolean;
   @Consume('attentionState') attentionState: FourD4yAttentionState;
+  @Consume('accountState') accountState: FourD4yAccountState;
   @State attentions: FourD4yAttentionThread[] = [];
   @State currentPage: number = 1;
   @State lastPage: number = 1;
@@ -40,12 +46,20 @@ export struct AttentionPage {
   private removalRefreshAttempt: number = 0;
   private openedAttentionMutationListenerId: number = -1;
   private readonly loadTimeoutMillis: number = 30000;
+  private isPageAlive: boolean = false;
+  private requestSessionGeneration: number = 0;
+  private readonly collectionSnapshotSource: FourD4yCollectionSnapshotSource = new FourD4yCollectionSnapshotSource();
 
   aboutToAppear(): void {
+    this.isPageAlive = true;
     this.beginLoad();
   }
 
   aboutToDisappear(): void {
+    this.attentionState.cache.releaseSnapshot(this.collectionSnapshotSource);
+    this.isPageAlive = false;
+    this.loadSequence++;
+    this.removeOperationSequence++;
     this.clearLoadWatchdog();
     this.clearRemovalWatchdog();
     this.clearOpenedAttentionMutationListener();
@@ -212,7 +226,6 @@ export struct AttentionPage {
           .fontColor($r('app.color.text_secondary'))
           .maxLines(1)
           .layoutWeight(1)
-        Text(attention.replyCount + ' 回复').fontSize(13).fontColor($r('app.color.text_secondary'))
         Button(this.isRemovingAttention ? '处理中…' : '取消关注')
           .type(ButtonType.Normal)
           .fontSize(12)
@@ -278,7 +291,12 @@ export struct AttentionPage {
   }
 
   private async beginLoad(): Promise<void> {
-    this.isLoggedIn = await FourD4ySession.isLoggedIn();
+    const sessionGeneration: number = this.accountState.getSessionGeneration();
+    const loggedIn: boolean = await FourD4ySession.isLoggedIn();
+    if (!this.isPageAlive || sessionGeneration !== this.accountState.getSessionGeneration()) {
+      return;
+    }
+    this.isLoggedIn = loggedIn;
     if (!this.isLoggedIn) {
       this.attentions = [];
       this.isLoading = false;
@@ -289,11 +307,13 @@ export struct AttentionPage {
   }
 
   private loadAttentionPage(page: number, allowDuringRemoval: boolean = false): void {
-    if (!Number.isFinite(page) || page < 1 || (this.isRemovingAttention && !allowDuringRemoval)) {
+    if (!this.isPageAlive || !Number.isFinite(page) || page < 1 ||
+      (this.isRemovingAttention && !allowDuringRemoval)) {
       return;
     }
     const requestedPage: number = Math.max(1, Math.floor(page));
     this.loadSequence += 1;
+    this.requestSessionGeneration = this.accountState.getSessionGeneration();
     this.requestedPage = requestedPage;
     this.terminalLoadSequence = 0;
     this.isLoading = true;
@@ -331,11 +351,18 @@ export struct AttentionPage {
   private async readAttentionsFromWeb(): Promise<void> {
     const expectedSequence: number = this.loadSequence;
     const expectedPage: number = this.requestedPage;
+    const sessionGeneration: number = this.accountState.getSessionGeneration();
     try {
+      await bindFourD4yCollectionCache(this.getUIContext().getHostContext() as common.Context,
+        this.webController, this.attentionState.cache, 'attention', () => this.isPageAlive &&
+          expectedSequence === this.loadSequence && sessionGeneration === this.accountState.getSessionGeneration());
+      if (!this.isPageAlive || expectedSequence !== this.loadSequence ||
+        sessionGeneration !== this.accountState.getSessionGeneration()) return;
       const rawResult: string = await this.webController.runJavaScript(
         this.getAttentionPageExtractionScript(expectedPage, expectedSequence)
       );
-      if (this.isLoadTerminal(expectedSequence) || expectedSequence !== this.loadSequence) {
+      if (!this.isPageAlive || this.requestSessionGeneration !== this.accountState.getSessionGeneration() ||
+        this.isLoadTerminal(expectedSequence) || expectedSequence !== this.loadSequence) {
         return;
       }
       const payload: FourD4yAttentionPagePayload | null = parseFourD4yAttentionPagePayload(rawResult);
@@ -361,7 +388,7 @@ export struct AttentionPage {
       }
       this.attentions = payload.threads;
       this.attentionState.observeServerAttentions(payload.threads.map((attention: FourD4yAttentionThread) =>
-        attention.threadId));
+        attention.threadId), payload.page, payload.lastPage, this.collectionSnapshotSource);
       this.currentPage = payload.page;
       this.lastPage = Math.max(payload.page, payload.lastPage);
       if (this.isRemovingAttention && this.removingThreadId.length > 0) {
@@ -390,7 +417,9 @@ export struct AttentionPage {
   }
 
   private async removeAttention(threadId: string): Promise<void> {
-    if (!/^\d+$/.test(threadId) || this.isRemovingAttention || this.isLoading ||
+    const sessionGeneration: number = this.requestSessionGeneration;
+    if (!this.isPageAlive || sessionGeneration !== this.accountState.getSessionGeneration() ||
+      !/^\d+$/.test(threadId) || this.isRemovingAttention || this.isLoading ||
       !this.attentions.some((attention: FourD4yAttentionThread) => attention.threadId === threadId)) {
       return;
     }
@@ -406,7 +435,8 @@ export struct AttentionPage {
       const rawResult: string = await this.webController.runJavaScript(
         this.getAttentionRemovalStartScript(threadId, operationSequence)
       );
-      if (operationSequence !== this.removeOperationSequence || threadId !== this.removingThreadId) {
+      if (!this.isPageAlive || sessionGeneration !== this.accountState.getSessionGeneration() ||
+        operationSequence !== this.removeOperationSequence || threadId !== this.removingThreadId) {
         return;
       }
       const payload: FourD4yAttentionMutationStartPayload | null =
@@ -422,7 +452,8 @@ export struct AttentionPage {
     } catch (_error) {
       // A native form submission can detach ArkWeb before this promise settles.
       // The scheduled server-list verification remains authoritative.
-      if (operationSequence === this.removeOperationSequence && this.isRemovingAttention) {
+      if (this.isPageAlive && sessionGeneration === this.accountState.getSessionGeneration() &&
+        operationSequence === this.removeOperationSequence && this.isRemovingAttention) {
         this.statusMessage = '正在等待服务器确认取消关注…';
       }
     }
@@ -430,15 +461,18 @@ export struct AttentionPage {
 
   private startRemovalWatchdog(operationSequence: number): void {
     this.clearRemovalWatchdog();
+    const sessionGeneration: number = this.requestSessionGeneration;
     this.removalRefreshAttempt = 0;
     this.removalTimeoutId = setTimeout(() => {
-      if (this.isRemovingAttention && operationSequence === this.removeOperationSequence) {
+      if (this.isPageAlive && sessionGeneration === this.accountState.getSessionGeneration() &&
+        this.isRemovingAttention && operationSequence === this.removeOperationSequence) {
         this.failRemoval(operationSequence, '取消关注请求超时，服务器结果未确认；请刷新关注列表核对。');
       }
     }, this.loadTimeoutMillis);
   }
 
   private scheduleRemovalRefresh(operationSequence: number, delayMillis: number): void {
+    const sessionGeneration: number = this.requestSessionGeneration;
     if (!this.isRemovingAttention || operationSequence !== this.removeOperationSequence) {
       return;
     }
@@ -446,7 +480,8 @@ export struct AttentionPage {
       clearTimeout(this.removalRefreshTimeoutId);
     }
     this.removalRefreshTimeoutId = setTimeout(() => {
-      if (!this.isRemovingAttention || operationSequence !== this.removeOperationSequence) {
+      if (!this.isPageAlive || sessionGeneration !== this.accountState.getSessionGeneration() ||
+        !this.isRemovingAttention || operationSequence !== this.removeOperationSequence) {
         return;
       }
       this.removalRefreshAttempt += 1;
@@ -513,6 +548,9 @@ export struct AttentionPage {
   }
 
   private isCurrentAttentionRequest(url: string): boolean {
+    if (!this.isPageAlive || this.requestSessionGeneration !== this.accountState.getSessionGeneration()) {
+      return false;
+    }
     const sequenceToken: RegExp = new RegExp('[?&]oh_attention_load=' + this.loadSequence + '(?:&|$)');
     const pageToken: RegExp = new RegExp('[?&]page=' + this.requestedPage + '(?:&|$)');
     return url.indexOf('/forum/my.php') >= 0 && url.indexOf('item=attention') >= 0 &&
@@ -557,6 +595,7 @@ export struct AttentionPage {
     if (sequence !== this.loadSequence) {
       return;
     }
+    this.attentionState.cache.releaseSnapshot(this.collectionSnapshotSource);
     this.finishLoad(sequence);
     this.statusMessage = message;
   }
@@ -578,11 +617,13 @@ export struct AttentionPage {
       '    const threadId = checkbox.getAttribute("value") || ""; if (!/^\\d+$/.test(threadId) || seen.has(threadId)) return;',
       '    const context = getContext(checkbox, threadId); const threadLink = findThreadLink(threadId, context) || findThreadLink(threadId, null);',
       '    const contextLinks = context ? Array.from(context.querySelectorAll("a[href]")) : []; const forumLink = contextLinks.find((link) => { try { return /^\\d+$/.test(new URL(link.getAttribute("href") || "", location.href).searchParams.get("fid") || ""); } catch (_) { return false; } }) || null;',
+      '    const forumCell = context ? context.querySelector("td.forum, .forum") : null;',
+      '    const forumName = text(forumCell) || text(forumLink);',
       '    let forumId = ""; try { forumId = new URL(forumLink ? (forumLink.getAttribute("href") || "") : "", location.href).searchParams.get("fid") || ""; } catch (_) {}',
       '    const replies = text(context ? context.querySelector("td.nums, .nums") : null); const replyMatch = /\\d+/.exec(replies); seen.add(threadId);',
-      '    threads.push({ threadId: threadId, forumId: /^\\d+$/.test(forumId) ? forumId : "", title: (threadLink ? text(threadLink) : "") || ("帖子 " + threadId), forumName: text(forumLink).slice(0, 80), replyCount: replyMatch ? Number.parseInt(replyMatch[0], 10) : 0, lastReplyAt: text(context ? context.querySelector("td.lastpost, .lastpost") : null).slice(0, 140) });',
+      '    threads.push({ threadId: threadId, forumId: /^\\d+$/.test(forumId) ? forumId : "", title: (threadLink ? text(threadLink) : "") || ("帖子 " + threadId), forumName: forumName.slice(0, 80), replyCount: replyMatch ? Number.parseInt(replyMatch[0], 10) : 0, lastReplyAt: text(context ? context.querySelector("td.lastpost, .lastpost") : null).slice(0, 140) });',
       '  });',
-      '  let lastPage = ' + page + '; Array.from(document.querySelectorAll("div.pages a, div.pages strong, .pg a, .pg strong")).forEach((node) => { const label = text(node); const value = /^\\d+$/.test(label) ? Number.parseInt(label, 10) : 0; if (value > lastPage) lastPage = value; });',
+      buildFourD4yCollectionPaginationScript('attention', page),
       '  const alert = document.querySelector(".alert_info, .alert_error, #messagetext, .message");',
       '  return JSON.stringify({ page: ' + page + ', lastPage: lastPage, loadSequence: ' + loadSequence + ', accessState: loginForm ? "loginRequired" : "available", hasChallenge: challenge, formFound: !!form, hasDeletionControl: deletionInputs.length > 0, errorMessage: text(alert).slice(0, 180), threads: threads });',
       '})()'
@@ -596,13 +637,17 @@ export struct AttentionPage {
       '  const threadId = ' + safeThreadId + ';',
       '  const finish = (started, errorMessage) => JSON.stringify({ threadId: threadId, operationSequence: ' + operationSequence + ', started: started, errorMessage: (errorMessage || "").slice(0, 180) });',
       '  const loginForm = document.querySelector("#loginform, form[name=login], input[name=username], input[name=password]"); if (loginForm) return finish(false, "登录状态已失效。");',
-      '  const form = Array.from(document.forms || []).find((candidate) => { try { const action = new URL(candidate.getAttribute("action") || location.href, location.href); return action.pathname.indexOf("/forum/my.php") >= 0 && action.searchParams.get("item") === "attention" && (action.searchParams.get("type") || "thread") === "thread"; } catch (_) { return false; } });',
+      '  const allowedAction = (value) => { try { const action = new URL(value || location.href, location.href); return action.origin === "https://www.4d4y.com" && !action.username && !action.password && action.pathname === "/forum/my.php" && action.searchParams.get("item") === "attention" && (action.searchParams.get("type") || "thread") === "thread"; } catch (_) { return false; } };',
+      '  if (!allowedAction(location.href)) return finish(false, "当前页面不是关注列表。");',
+      '  const form = Array.from(document.forms || []).find((candidate) => allowedAction(candidate.getAttribute("action")));',
       '  const checkbox = form ? Array.from(form.elements || []).find((node) => (node.getAttribute("name") || "") === "delete[]" && (node.getAttribute("value") || "") === threadId) : null;',
       '  const formhash = form ? Array.from(form.elements || []).find((node) => (node.getAttribute("name") || "") === "formhash") : null;',
       '  const submit = form ? Array.from(form.elements || []).find((node) => (node.getAttribute("name") || "") === "attentionsubmit") : null;',
       '  if (!form || !checkbox || !formhash || !submit) return finish(false, "当前关注页未提供可确认的取消关注表单。");',
+      '  const deletionInputs = Array.from(form.elements || []).filter((node) => (node.getAttribute("name") || "") === "delete[]");',
+      '  if (checkbox.disabled || deletionInputs.some((node) => node.type !== "checkbox") || !allowedAction(submit.getAttribute("formaction") || form.getAttribute("action"))) return finish(false, "取消关注表单的提交范围无法确认。");',
       '  if (typeof form.requestSubmit !== "function") return finish(false, "当前页面不支持安全提交关注表单。");',
-      '  try { checkbox.checked = true; form.requestSubmit(submit); return finish(true, ""); } catch (_) { return finish(false, "取消关注表单未能在当前页面启动。"); }',
+      '  try { deletionInputs.forEach((node) => { node.checked = node === checkbox; }); form.requestSubmit(submit); return finish(true, ""); } catch (_) { return finish(false, "取消关注表单未能在当前页面启动。"); }',
       '})()'
     ].join('\n');
   }

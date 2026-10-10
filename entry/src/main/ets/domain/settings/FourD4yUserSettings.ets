@@ -84,6 +84,23 @@ export function normalizeFourD4yUserSettings(settings: FourD4yUserSettings): Fou
   };
 }
 
+/** Merge only this user's changed fields, not a stale page's whole snapshot. */
+export function mergeFourD4yUserSettingsChanges(current: FourD4yUserSettings,
+  before: FourD4yUserSettings, next: FourD4yUserSettings): FourD4yUserSettings {
+  return normalizeFourD4yUserSettings({
+    themeMode: next.themeMode !== before.themeMode ? next.themeMode : current.themeMode,
+    fontScale: next.fontScale !== before.fontScale ? next.fontScale : current.fontScale,
+    postLineSpacing: next.postLineSpacing !== before.postLineSpacing ? next.postLineSpacing : current.postLineSpacing,
+    imageLoadPolicy: next.imageLoadPolicy !== before.imageLoadPolicy ? next.imageLoadPolicy : current.imageLoadPolicy,
+    quickForumIds: JSON.stringify(next.quickForumIds) !== JSON.stringify(before.quickForumIds) ?
+      next.quickForumIds : current.quickForumIds,
+    showPinnedThreads: next.showPinnedThreads !== before.showPinnedThreads ?
+      next.showPinnedThreads : current.showPinnedThreads,
+    postTimeSortForumIds: JSON.stringify(next.postTimeSortForumIds) !== JSON.stringify(before.postTimeSortForumIds) ?
+      next.postTimeSortForumIds : current.postTimeSortForumIds
+  });
+}
+
 export function normalizeFourD4yQuickForumIds(value: Object): string[] {
   if (!Array.isArray(value)) {
     return [...FOUR_D4Y_QUICK_FORUM_IDS];

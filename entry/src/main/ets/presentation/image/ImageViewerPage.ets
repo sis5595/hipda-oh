@@ -9,6 +9,15 @@ import fs from '@ohos.file.fs';
 import { FourD4yAuthenticatedImageLoader } from '../../data/remote/FourD4yAuthenticatedImageLoader';
 import { FourD4yImageExport, FourD4yPreparedImageExport } from '../../data/remote/FourD4yImageExport';
 
+interface ImageExportSelection {
+  cacheDir: string;
+  key: string;
+  url: string;
+  threadId: string;
+  viewerUserId: string;
+  forumId: string;
+}
+
 /**
  * Native image reader for forum body images.
  *
@@ -27,6 +36,7 @@ export struct ImageViewerPage {
   /** One full-size attachment is retained only for the active gallery page. */
   @State activeFullImage: image.PixelMap | undefined = undefined;
   @State activeFullImageKey: string = '';
+  @State activeAnimationPath: string = '';
   @State imageActionState: string = '';
   private readonly fullImageLoader: FourD4yAuthenticatedImageLoader = new FourD4yAuthenticatedImageLoader();
   private readonly imageExport: FourD4yImageExport = new FourD4yImageExport();
@@ -34,8 +44,10 @@ export struct ImageViewerPage {
   private preparedImageKey: string = '';
   private preparedImagePath: string = '';
   private preparedImageExtension: string = '';
+  private isViewerActive: boolean = false;
 
   aboutToAppear(): void {
+    this.isViewerActive = true;
     const count: number = this.imageRoute.items.length;
     this.activeImageIndex = count === 0 ? 0 : Math.min(Math.max(this.imageRoute.initialIndex, 0), count - 1);
     const states: string[] = [];
@@ -51,7 +63,9 @@ export struct ImageViewerPage {
   }
 
   aboutToDisappear(): void {
+    this.isViewerActive = false;
     this.fullImageLoadSequence += 1;
+    this.fullImageLoader.cancelActiveDownload();
     this.releaseActiveFullImage();
   }
 
@@ -174,20 +188,6 @@ export struct ImageViewerPage {
   @Builder
   private buildImagePage(item: ImageViewerItem, index: number) {
     Stack({ alignContent: Alignment.Top }) {
-      if (this.getImageLoadState(index) === 'loading') {
-        Column({ space: 10 }) {
-          LoadingProgress()
-            .width(28)
-            .height(28)
-          Text('正在加载原图…')
-            .fontSize(14)
-            .fontColor('#B3FFFFFF')
-        }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-      }
-
       if (this.getImageLoadState(index) === 'failed') {
         Column({ space: 12 }) {
           Text('图片加载失败')
@@ -204,17 +204,7 @@ export struct ImageViewerPage {
         Scroll() {
           // Width without a fixed height preserves aspect ratio. Long images
           // therefore begin at the top and read continuously downward.
-          Image(this.getImageRenderSource(item, index))
-            .width('100%')
-            .objectFit(ImageFit.Contain)
-            .onComplete(() => {
-              this.updateImageLoadState(index, this.isActiveFullImage(item, index) ||
-                !this.needsAuthenticatedFullImage(item) ? 'ready' : 'preview');
-            })
-            .onError(() => {
-              this.updateImageLoadState(index, this.needsAuthenticatedFullImage(item) &&
-                item.previewUrl !== undefined && item.previewUrl.length > 0 ? 'preview-failed' : 'failed');
-            })
+          this.buildRenderedImage(item, index)
         }
         // ArkUI's built-in zoom is available only to a free Scroll. At its
         // baseline width there is no horizontal image overflow, so the outer
@@ -252,9 +242,72 @@ export struct ImageViewerPage {
         .width('100%')
         .height('100%')
       }
+
+      // Draw after the image so an opaque preview cannot hide loading/error
+      // feedback. Never describe a downloaded thumbnail as the full original.
+      if (this.getImageLoadState(index) === 'loading' ||
+        this.getImageLoadState(index) === 'preview-failed' || this.getImageLoadState(index) === 'scaled-preview' ||
+        this.getImageLoadState(index) === 'static-preview') {
+        Text(this.getImageLoadState(index) === 'loading' ? '正在加载原图…' :
+          (this.getImageLoadState(index) === 'static-preview' ? '受内存限制，显示动图静态预览；保存/分享仍为原图' :
+            (this.getImageLoadState(index) === 'scaled-preview' ?
+              '受内存限制，显示缩放预览；保存/分享仍为原图' : '原图加载失败，当前仅为预览图；可返回后重试')))
+          .fontSize(14)
+          .fontColor(Color.White)
+          .backgroundColor('#99000000')
+          .padding(10)
+          .borderRadius(8)
+          .margin({ top: 12, left: 12, right: 12 })
+          .hitTestBehavior(HitTestMode.None)
+      }
     }
     .width('100%')
     .height('100%')
+  }
+
+  @Builder
+  private buildRenderedImage(item: ImageViewerItem, index: number) {
+    // Read state inside the Image update function. A by-value @Builder source
+    // parameter freezes the initial thumbnail even when decoding completes.
+    if (index === this.activeImageIndex && (this.activeFullImage !== undefined ||
+      this.activeAnimationPath.length > 0)) {
+      Image(this.getImageRenderSource(item, index))
+        .width('100%')
+        .objectFit(ImageFit.Contain)
+        .onComplete(this.createRenderedImageCallback(item, index, this.getImageRenderSource(item, index), true))
+        .onError(this.createRenderedImageCallback(item, index, this.getImageRenderSource(item, index), false))
+    } else if (this.hasAttachmentPreview(item)) {
+      Image(item.previewUrl as string)
+        .width('100%')
+        .objectFit(ImageFit.Contain)
+    } else {
+      // An empty Image source can retain its last native texture. Remove the
+      // original Image node instead of leaving it in the Swiper neighbour.
+      Blank().width('100%').height(1)
+    }
+  }
+
+  private createRenderedImageCallback(item: ImageViewerItem, index: number,
+    source: string | image.PixelMap, succeeded: boolean): () => void {
+    // Capture this render's source, not the source at callback delivery time.
+    return () => this.onRenderedImageResult(item, index, source, succeeded);
+  }
+
+  private onRenderedImageResult(item: ImageViewerItem, index: number,
+    source: string | image.PixelMap, succeeded: boolean): void {
+    if (!this.isViewerActive || this.imageRoute.items[index] === undefined ||
+      this.imageRoute.items[index].key !== item.key || this.getImageRenderSource(item, index) !== source) {
+      return;
+    }
+    // Preview rendering and original downloading are separate operations.
+    // Only the authenticated loader may finish the latter; late thumbnail
+    // callbacks must not clear its loading/error state or a newer PixelMap.
+    if (this.needsManagedFullImage(item) && !this.isActiveFullImage(item, index)) {
+      return;
+    }
+    this.updateImageLoadState(index, succeeded ?
+      (this.getImageLoadState(index) === 'scaled-preview' || this.getImageLoadState(index) === 'static-preview' ?
+        this.getImageLoadState(index) : 'ready') : 'failed');
   }
 
   private getImageLoadState(index: number): string {
@@ -270,65 +323,88 @@ export struct ImageViewerPage {
     this.imageLoadStates = next;
   }
 
-  private needsAuthenticatedFullImage(item: ImageViewerItem): boolean {
+  private needsManagedFullImage(item: ImageViewerItem): boolean {
+    return /^https?:\/\//i.test(item.url);
+  }
+
+  private hasAttachmentPreview(item: ImageViewerItem): boolean {
+    // A public image's "preview" is commonly the same original URL. Loading
+    // it directly would silently bypass the bounded public-image pipeline.
     return FourD4yAuthenticatedImageLoader.isAuthenticatedAttachmentUrl(item.url) &&
-      /^\d{1,20}$/.test(this.imageRoute.threadId);
+      item.previewUrl !== undefined && item.previewUrl.length > 0 && item.previewUrl !== item.url;
   }
 
   private isActiveFullImage(item: ImageViewerItem, index: number): boolean {
-    return index === this.activeImageIndex && this.activeFullImage !== undefined &&
+    return index === this.activeImageIndex && (this.activeFullImage !== undefined ||
+      (this.activeAnimationPath !== undefined && this.activeAnimationPath.length > 0)) &&
       this.activeFullImageKey === item.key;
   }
 
   private getImageRenderSource(item: ImageViewerItem, index: number): string | image.PixelMap {
+    if (this.isActiveFullImage(item, index) && this.activeAnimationPath.length > 0) {
+      return 'file://' + this.activeAnimationPath;
+    }
     if (this.isActiveFullImage(item, index) && this.activeFullImage !== undefined) {
       return this.activeFullImage;
     }
-    if (this.needsAuthenticatedFullImage(item) && item.previewUrl !== undefined && item.previewUrl.length > 0) {
-      return item.previewUrl;
+    if (this.hasAttachmentPreview(item)) {
+      return item.previewUrl as string;
     }
-    return item.url;
+    // Do not let Image(URL) race the bounded download/decode path, including
+    // off-screen Swiper neighbours. Only the active original is decoded.
+    return this.needsManagedFullImage(item) ? '' : item.url;
   }
 
   private loadActiveFullImage(): void {
     this.fullImageLoadSequence += 1;
+    this.fullImageLoader.cancelActiveDownload();
     const sequence: number = this.fullImageLoadSequence;
     const item: ImageViewerItem | undefined = this.imageRoute.items[this.activeImageIndex];
     this.releaseActiveFullImage();
-    if (item === undefined || !this.needsAuthenticatedFullImage(item)) {
+    if (item === undefined || !this.needsManagedFullImage(item)) {
       return;
     }
     this.updateImageLoadState(this.activeImageIndex, 'loading');
-    this.loadAuthenticatedFullImage(item, this.activeImageIndex, sequence);
+    this.loadManagedFullImage(item, this.activeImageIndex, sequence);
   }
 
-  private async loadAuthenticatedFullImage(item: ImageViewerItem, index: number, sequence: number): Promise<void> {
+  private async loadManagedFullImage(item: ImageViewerItem, index: number, sequence: number): Promise<void> {
+    const cacheDir: string = (this.getUIContext().getHostContext() as common.Context).cacheDir;
     const result = await this.fullImageLoader.load(item.url, this.imageRoute.threadId,
-      this.imageRoute.viewerUserId, this.imageRoute.forumId);
+      this.imageRoute.viewerUserId, this.imageRoute.forumId, () => this.isViewerActive &&
+        sequence === this.fullImageLoadSequence && index === this.activeImageIndex &&
+        this.imageRoute.items[index] !== undefined && this.imageRoute.items[index].key === item.key, cacheDir);
     if (sequence !== this.fullImageLoadSequence || index !== this.activeImageIndex ||
       this.imageRoute.items[index] === undefined || this.imageRoute.items[index].key !== item.key) {
       if (result.pixelMap !== undefined) {
         this.releasePixelMap(result.pixelMap);
       }
+      if (result.animatedPath !== undefined) this.fullImageLoader.releaseAnimation(result.animatedPath);
       return;
     }
-    if (result.pixelMap === undefined) {
+    if (result.pixelMap === undefined && result.animatedPath === undefined) {
       // A preview still gives the reader a usable picture if the protected
       // original expires or the network drops. Do not replace it with a blank
       // error screen merely because the upgrade failed.
-      this.updateImageLoadState(index, item.previewUrl === undefined || item.previewUrl.length === 0 ?
-        'failed' : 'preview-failed');
+      this.updateImageLoadState(index, this.hasAttachmentPreview(item) ? 'preview-failed' : 'failed');
       return;
     }
     this.activeFullImage = result.pixelMap;
+    this.activeAnimationPath = result.animatedPath === undefined ? '' : result.animatedPath;
     this.activeFullImageKey = item.key;
-    this.updateImageLoadState(index, 'ready');
+    this.updateImageLoadState(index, result.staticPreview === true ? 'static-preview' :
+      (result.scaledPreview === true ? 'scaled-preview' : 'ready'));
   }
 
   private releaseActiveFullImage(): void {
     const current: image.PixelMap | undefined = this.activeFullImage;
     this.activeFullImage = undefined;
     this.activeFullImageKey = '';
+    const animationPath: string = this.activeAnimationPath;
+    this.activeAnimationPath = '';
+    if (animationPath !== undefined && animationPath.length > 0) {
+      this.fullImageLoader.releaseAnimation(animationPath);
+    }
     if (current !== undefined) {
       this.releasePixelMap(current);
     }
@@ -370,13 +446,24 @@ export struct ImageViewerPage {
       this.imageRoute.items[this.activeImageIndex] : undefined;
   }
 
-  private async prepareCurrentImageExport(): Promise<FourD4yPreparedImageExport | undefined> {
+  private captureImageExportSelection(): ImageExportSelection | undefined {
     const item: ImageViewerItem | undefined = this.getActiveImageItem();
     const hostContext = this.getUIContext().getHostContext();
-    if (item === undefined || hostContext === undefined) {
+    if (!this.isViewerActive || item === undefined || hostContext === undefined) {
       return undefined;
     }
-    if (this.preparedImageKey === item.key && this.preparedImagePath.length > 0) {
+    return {
+      cacheDir: hostContext.cacheDir,
+      key: item.key + '|' + item.url + '|' + this.imageRoute.threadId + '|' + this.imageRoute.viewerUserId,
+      url: item.url,
+      threadId: this.imageRoute.threadId,
+      viewerUserId: this.imageRoute.viewerUserId,
+      forumId: this.imageRoute.forumId
+    };
+  }
+
+  private async prepareImageExport(selection: ImageExportSelection): Promise<FourD4yPreparedImageExport | undefined> {
+    if (this.preparedImageKey === selection.key && this.preparedImagePath.length > 0) {
       try {
         if (fs.accessSync(this.preparedImagePath)) {
           return { filePath: this.preparedImagePath, extension: this.preparedImageExtension };
@@ -385,10 +472,10 @@ export struct ImageViewerPage {
         // The cache can be cleared by the system at any time. Download again.
       }
     }
-    const prepared: FourD4yPreparedImageExport | undefined = await this.imageExport.prepare(hostContext.cacheDir,
-      item.url, this.imageRoute.threadId, this.imageRoute.viewerUserId, this.imageRoute.forumId);
-    if (prepared !== undefined) {
-      this.preparedImageKey = item.key;
+    const prepared: FourD4yPreparedImageExport | undefined = await this.imageExport.prepare(selection.cacheDir,
+      selection.url, selection.threadId, selection.viewerUserId, selection.forumId);
+    if (prepared !== undefined && this.isViewerActive) {
+      this.preparedImageKey = selection.key;
       this.preparedImagePath = prepared.filePath;
       this.preparedImageExtension = prepared.extension;
     }
@@ -399,29 +486,39 @@ export struct ImageViewerPage {
     if (this.imageActionState.length > 0) {
       return;
     }
-    const item: ImageViewerItem | undefined = this.getActiveImageItem();
+    const selection: ImageExportSelection | undefined = this.captureImageExportSelection();
     const hostContext = this.getUIContext().getHostContext();
-    if (item === undefined || hostContext === undefined) {
+    if (selection === undefined || hostContext === undefined) {
       this.showImageActionToast('暂时无法保存图片');
       return;
     }
     this.imageActionState = 'saving';
+    const grantStartedAt: number = Date.now();
     let destination: fs.File | undefined = undefined;
+    let helper: photoAccessHelper.PhotoAccessHelper | undefined = undefined;
     try {
       const context: common.UIAbilityContext = hostContext as common.UIAbilityContext;
-      // The asset and descriptor are created while SaveButton's short-lived
-      // grant is active. Writing to this opened descriptor may finish after
-      // the initial grant window, as documented for the secure save flow.
-      const helper: photoAccessHelper.PhotoAccessHelper = photoAccessHelper.getPhotoAccessHelper(context);
-      const assetUri: string = await helper.createAsset(photoAccessHelper.PhotoType.IMAGE,
-        this.getImageExtensionHint(item.url));
-      destination = fs.openSync(assetUri, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
-      const prepared: FourD4yPreparedImageExport | undefined = await this.prepareCurrentImageExport();
+      const prepared: FourD4yPreparedImageExport | undefined = await this.prepareImageExport(selection);
+      if (!this.isViewerActive) {
+        return;
+      }
       if (prepared === undefined) {
         this.showImageActionToast('原图下载失败，请稍后重试');
         return;
       }
-      if (!this.copyPreparedImageToOpenAsset(prepared.filePath, destination)) {
+      // API 20+ grants one media-library call within one minute. Validate
+      // the bytes before creating an asset, so PHP image URLs do not force
+      // PNG/GIF content into a guessed JPEG and failed downloads leave no
+      // empty album entry. A slow download remains cached for a fresh click.
+      const elapsed: number = Date.now() - grantStartedAt;
+      if (elapsed < 0 || elapsed >= 55000) {
+        this.showImageActionToast('原图已准备好，请再次点击保存');
+        return;
+      }
+      helper = photoAccessHelper.getPhotoAccessHelper(context);
+      const assetUri: string = await helper.createAsset(photoAccessHelper.PhotoType.IMAGE, prepared.extension);
+      destination = fs.openSync(assetUri, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
+      if (!await this.copyPreparedImageToOpenAsset(prepared.filePath, destination)) {
         this.showImageActionToast('保存图片失败，请稍后重试');
         return;
       }
@@ -436,7 +533,16 @@ export struct ImageViewerPage {
           // The provider owns the media asset after its descriptor is closed.
         }
       }
-      this.imageActionState = '';
+      if (helper !== undefined) {
+        try {
+          await helper.release();
+        } catch (_error) {
+          // Releasing the helper must not change an already completed save.
+        }
+      }
+      if (this.isViewerActive) {
+        this.imageActionState = '';
+      }
     }
   }
 
@@ -444,14 +550,18 @@ export struct ImageViewerPage {
     if (this.imageActionState.length > 0) {
       return;
     }
+    const selection: ImageExportSelection | undefined = this.captureImageExportSelection();
     const hostContext = this.getUIContext().getHostContext();
-    if (hostContext === undefined) {
+    if (selection === undefined || hostContext === undefined) {
       this.showImageActionToast('暂时无法打开系统分享');
       return;
     }
     this.imageActionState = 'sharing';
     try {
-      const prepared: FourD4yPreparedImageExport | undefined = await this.prepareCurrentImageExport();
+      const prepared: FourD4yPreparedImageExport | undefined = await this.prepareImageExport(selection);
+      if (!this.isViewerActive) {
+        return;
+      }
       if (prepared === undefined) {
         this.showImageActionToast('原图下载失败，请稍后重试');
         return;
@@ -472,11 +582,13 @@ export struct ImageViewerPage {
     } catch (_error) {
       this.showImageActionToast('系统分享暂时不可用');
     } finally {
-      this.imageActionState = '';
+      if (this.isViewerActive) {
+        this.imageActionState = '';
+      }
     }
   }
 
-  private copyPreparedImageToOpenAsset(sourcePath: string, destination: fs.File): boolean {
+  private async copyPreparedImageToOpenAsset(sourcePath: string, destination: fs.File): Promise<boolean> {
     let source: fs.File | undefined = undefined;
     try {
       source = fs.openSync(sourcePath, fs.OpenMode.READ_ONLY);
@@ -484,11 +596,11 @@ export struct ImageViewerPage {
       if (!Number.isSafeInteger(size) || size <= 0 || size > 32 * 1024 * 1024) {
         return false;
       }
-      const bytes: ArrayBuffer = new ArrayBuffer(size);
-      if (fs.readSync(source.fd, bytes) !== size) {
-        return false;
-      }
-      return fs.writeSync(destination.fd, bytes) === size;
+      // Copy between already-open descriptors asynchronously. Do not allocate
+      // another full image-sized JS buffer or perform the bulk I/O on the UI
+      // thread. The caller retains the album descriptor until this settles.
+      await fs.copyFile(source.fd, destination.fd);
+      return true;
     } catch (_error) {
       return false;
     } finally {
@@ -502,14 +614,10 @@ export struct ImageViewerPage {
     }
   }
 
-  private getImageExtensionHint(url: string): string {
-    const match: RegExpExecArray | null = /\.([a-zA-Z0-9]{1,5})(?:[?#]|$)/.exec(url);
-    const extension: string = match === null ? '' : match[1].toLowerCase();
-    if (extension === 'jpeg') return 'jpg';
-    return /^(?:avif|bmp|gif|jpg|png|webp)$/.test(extension) ? extension : 'jpg';
-  }
-
   private showImageActionToast(message: string): void {
+    if (!this.isViewerActive) {
+      return;
+    }
     try {
       this.getUIContext().getPromptAction().showToast({ message: message });
     } catch (_error) {

@@ -1,8 +1,13 @@
 import { webview } from '@kit.ArkWeb';
+import { FourD4yRowVersions } from '../common/FourD4yRowVersions';
+import { FrameCallback } from '@kit.ArkUI';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { FourD4yMessageNativeClient, FourD4yNativePrivateConversationResult } from
   '../../data/remote/FourD4yMessageNativeClient';
 import { FourD4ySession } from '../../data/remote/FourD4ySession';
+import { FourD4yAccountState } from '../../domain/account/FourD4yAccountState';
+import { FourD4yPrivateConversationClearClient, FourD4yPrivateConversationClearResult } from
+  '../../data/remote/FourD4yPrivateConversationClearClient';
 import { FourD4yPrivateConversationMessage, FourD4yPrivateConversationPayload,
   FourD4yPrivateConversationReaderOutcome, FourD4yPrivateMessageSegment,
   buildFourD4yPrivateConversationUrl,
@@ -24,13 +29,32 @@ enum PrivateMessageWebOperation {
   Submit = 'submit'
 }
 
+class ConversationLayoutCallback extends FrameCallback {
+  private readonly action: () => void;
+
+  constructor(action: () => void) {
+    super();
+    this.action = action;
+  }
+
+  onFrame(_frameTimeInNano: number): void {}
+
+  onIdle(_timeLeftInNano: number): void {
+    this.action();
+  }
+}
+
 /** Native conversation view and a compose-only route for a new recipient. */
 @Component
 export struct PrivateMessageDetailPage {
   @Consume('pathStack') pathStack: NavPathStack;
   @Consume('authState') isLoggedIn: boolean;
+  @Consume('accountState') accountState: FourD4yAccountState;
   @State route: PrivateMessageRouteParams = { participantUserId: '', participantName: '' };
   @State messages: FourD4yPrivateConversationMessage[] = [];
+  private readonly messageRowVersions: FourD4yRowVersions<FourD4yPrivateConversationMessage> =
+    new FourD4yRowVersions<FourD4yPrivateConversationMessage>(
+      (message: FourD4yPrivateConversationMessage): string => message.messageId);
   @State isLoading: boolean = false;
   /** A background confirmation must never replace an already visible conversation with a loading page. */
   @State isRefreshing: boolean = false;
@@ -43,8 +67,16 @@ export struct PrivateMessageDetailPage {
   @State privateMessageErrorMessage: string = '';
   @State privateMessageCooldownSeconds: number = 0;
   @State composeOnly: boolean = false;
+  @State canClearConversation: boolean = false;
+  @State isClearingConversation: boolean = false;
+  private viewerUserId: string = '';
+  private routeSessionGeneration: number = -1;
+  private clearSequence: number = 0;
+  private isClearConfirmationOpen: boolean = false;
+  private readonly clearClient: FourD4yPrivateConversationClearClient = new FourD4yPrivateConversationClearClient();
 
   private readonly nativeClient: FourD4yMessageNativeClient = new FourD4yMessageNativeClient();
+  private readonly conversationScroller: Scroller = new Scroller();
   private readonly privateMessageWebController: webview.WebviewController = new webview.WebviewController();
   private loadSequence: number = 0;
   private terminalLoadSequence: number = 0;
@@ -68,9 +100,12 @@ export struct PrivateMessageDetailPage {
   private readonly privateMessageCooldownMillis: number = 15000;
 
   aboutToDisappear(): void {
+    this.isPrivateMessageRouteReady = false;
+    this.clearSequence += 1;
+    this.privateMessageFormSequence += 1;
+    this.privateMessageSubmissionSequence += 1;
+    this.pendingPrivateMessage = '';
     this.loadSequence += 1;
-    this.isLoading = false;
-    this.isRefreshing = false;
     this.preservesVisibleContent = false;
     this.clearLoadWatchdog();
     this.clearReadConfirmation();
@@ -129,6 +164,7 @@ export struct PrivateMessageDetailPage {
       this.hasScheduledReadConfirmation = false;
       this.clearReadConfirmation();
       this.isPrivateMessageRouteReady = true;
+      this.routeSessionGeneration = this.accountState.getSessionGeneration();
       if (!this.composeOnly) {
         this.loadConversation();
       }
@@ -149,19 +185,82 @@ export struct PrivateMessageDetailPage {
   @Builder
   private buildTitleActions() {
     if (!this.composeOnly) {
-      Image($r('app.media.toolbar_refresh'))
+      Image($r('app.media.toolbar_more'))
         .width(42)
         .height(42)
         .objectFit(ImageFit.Contain)
         .fillColor($r('app.color.text_detail'))
         .padding(9)
-        .opacity(!this.isLoading && !this.isRefreshing ? 1 : 0.35)
-        .onClick(() => {
-          if (!this.isLoading && !this.isRefreshing) {
-            this.loadConversation(this.messages.length > 0);
-          }
-        })
+        .bindMenu(this.getConversationMenuItems())
     }
+  }
+
+  private getConversationMenuItems(): MenuElement[] {
+    return [{ value: '刷新', enabled: !this.isRequestPending() && !this.isClearingConversation,
+      action: () => { this.loadConversation(this.messages.length > 0); } },
+      { value: this.isClearingConversation ? '正在清空…' : '清空短消息',
+        enabled: this.canRequestConversationClear(), action: () => { this.requestConversationClear(); } }];
+  }
+
+  private canRequestConversationClear(): boolean {
+    return this.isPrivateMessageRouteReady && this.routeSessionGeneration === this.accountState.getSessionGeneration() &&
+      this.isLoggedIn && this.canClearConversation && !this.isRequestPending() && !this.isClearingConversation &&
+      !this.isClearConfirmationOpen && !this.isPrivateMessageSending && !this.isPrivateMessageFormLoading &&
+      this.messages.length > 0 && /^[1-9]\d{0,15}$/.test(this.viewerUserId) &&
+      this.viewerUserId !== this.route.participantUserId;
+  }
+
+  private requestConversationClear(): void {
+    if (!this.canRequestConversationClear()) return;
+    const sequence: number = this.clearSequence;
+    const participant: string = this.route.participantUserId;
+    const viewer: string = this.viewerUserId;
+    const generation: number = this.routeSessionGeneration;
+    this.isClearConfirmationOpen = true;
+    this.getUIContext().getPromptAction().showDialog({ title: '清空短消息？',
+      message: '确认清空当前账号与“' + this.route.participantName + '”的全部短消息？此操作不可恢复。',
+      buttons: [{ text: '取消', color: $r('app.color.text_body') },
+        { text: '清空', color: $r('app.color.danger_text') }]
+    }).then((result) => {
+      if (!this.isCurrentClearTarget(sequence, participant, viewer, generation)) return;
+      this.isClearConfirmationOpen = false;
+      if (result.index === 1 && this.canRequestConversationClear()) this.clearConversation(participant, viewer, generation);
+    }).catch(() => {
+      if (this.isCurrentClearTarget(sequence, participant, viewer, generation)) this.isClearConfirmationOpen = false;
+    });
+  }
+
+  private isCurrentClearTarget(sequence: number, participant: string, viewer: string, generation: number): boolean {
+    return this.isPrivateMessageRouteReady && sequence === this.clearSequence &&
+      participant === this.route.participantUserId && viewer === this.viewerUserId &&
+      generation === this.routeSessionGeneration && generation === this.accountState.getSessionGeneration();
+  }
+
+  private async clearConversation(participant: string, viewer: string, generation: number): Promise<void> {
+    const sequence: number = ++this.clearSequence;
+    this.isClearingConversation = true;
+    this.clearReadConfirmation();
+    this.privateMessageFormSequence += 1;
+    this.clearPrivateMessageFormWatchdog();
+    this.isPrivateMessageFormReady = false;
+    this.isPrivateMessageFormLoading = false;
+    this.privateMessageErrorMessage = '';
+    const result: FourD4yPrivateConversationClearResult = await this.clearClient.clear(participant, viewer,
+      () => this.isCurrentClearTarget(sequence, participant, viewer, generation));
+    if (!this.isCurrentClearTarget(sequence, participant, viewer, generation)) return;
+    this.isClearingConversation = false;
+    if (result === 'confirmed') {
+      this.messages = this.messageRowVersions.track([]);
+      this.canClearConversation = false;
+      try { this.getUIContext().getPromptAction().showToast({ message: '短消息已清空' }); } catch (_error) {}
+      this.pathStack.pop();
+      return;
+    }
+    this.privateMessageErrorMessage = result === 'not-started' ?
+      '无法确认当前账号或论坛清空控件，未执行删除。请刷新后重试。' :
+      '暂未确认清空结果，请刷新会话核对；未自动重复删除。';
+    this.preparePrivateMessageFormWhenReady();
+    this.loadConversation(true);
   }
 
   @Builder
@@ -188,7 +287,7 @@ export struct PrivateMessageDetailPage {
           .height(160)
           .width('100%')
           .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-          .enabled(!this.isPrivateMessageSending)
+          .enabled(!this.isPrivateMessageSending && !this.isClearingConversation)
           .onChange((value: string) => {
             this.privateMessageDraft = value;
             if (this.privateMessageErrorMessage.length > 0) {
@@ -215,7 +314,7 @@ export struct PrivateMessageDetailPage {
           .height(64)
           .layoutWeight(1)
           .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-          .enabled(!this.isPrivateMessageSending)
+          .enabled(!this.isPrivateMessageSending && !this.isClearingConversation)
           .onChange((value: string) => {
             this.privateMessageDraft = value;
             if (this.privateMessageErrorMessage.length > 0) {
@@ -280,12 +379,12 @@ export struct PrivateMessageDetailPage {
             .padding({ left: 20, right: 20, top: 8, bottom: 4 })
             .width('100%')
         }
-        List({ space: 6 }) {
+        List({ space: 6, scroller: this.conversationScroller, initialIndex: Math.max(0, this.messages.length - 1) }) {
           ForEach(this.messages, (message: FourD4yPrivateConversationMessage) => {
             ListItem() {
               this.buildMessage(message);
             }
-          }, (message: FourD4yPrivateConversationMessage) => message.messageId)
+          }, (message: FourD4yPrivateConversationMessage) => this.messageRowVersions.key(message))
         }
         .layoutWeight(1)
         .width('100%')
@@ -463,13 +562,34 @@ export struct PrivateMessageDetailPage {
   }
 
   private isCurrentPrivateMessagePreflightRequest(url: string): boolean {
-    return url.indexOf('/forum/pm.php') >= 0 &&
-      url.indexOf('oh_pm_compose=' + this.privateMessageFormSequence) >= 0;
+    return this.isCurrentPrivateMessageDocument(url, 'oh_pm_compose', this.privateMessageFormSequence) &&
+      !/[?&]action=/.test(url);
+  }
+
+  private isCurrentPrivateMessageDocument(url: string, marker: string, sequence: number): boolean {
+    if (!this.isPrivateMessageRouteReady ||
+      this.routeSessionGeneration !== this.accountState.getSessionGeneration() ||
+      !/^https:\/\/www\.4d4y\.com\/forum\/pm\.php\?[^#\s]*$/.test(url)) return false;
+    const params: string[] = url.substring(url.indexOf('?') + 1).split('&');
+    const identities: string[] = ['uid', marker];
+    const values: string[] = [this.route.participantUserId, String(sequence)];
+    for (let index: number = 0; index < identities.length; index += 1) {
+      const matches: string[] = params.filter((param: string): boolean =>
+        param.split('=')[0] === identities[index]);
+      if (matches.length !== 1 || matches[0] !== identities[index] + '=' + values[index]) return false;
+    }
+    return sequence > 0;
+  }
+
+  private isCurrentPrivateMessageSubmissionRequest(url: string): boolean {
+    return this.isCurrentPrivateMessageDocument(url, 'oh_pm_submit', this.privateMessageSubmissionSequence) &&
+      url.substring(url.indexOf('?') + 1).split('&').filter((param: string): boolean =>
+        param.split('=')[0] === 'action').join('&') === 'action=send';
   }
 
   private handleCompletedPrivateMessageWebLoad(url: string): void {
     if (this.isPrivateMessageSending) {
-      this.readPrivateMessageSubmissionResult();
+      if (this.isCurrentPrivateMessageSubmissionRequest(url)) this.readPrivateMessageSubmissionResult();
       return;
     }
     if (this.isCurrentPrivateMessagePreflightRequest(url)) {
@@ -479,7 +599,9 @@ export struct PrivateMessageDetailPage {
 
   private handlePrivateMessageWebError(url: string): void {
     if (this.isPrivateMessageSending) {
-      this.failPrivateMessageSubmission('私信发送时网络出错；请先到论坛核对结果后再重试。');
+      if (this.isCurrentPrivateMessageSubmissionRequest(url)) {
+        this.failPrivateMessageSubmission('私信发送时网络出错；请先到论坛核对结果后再重试。');
+      }
     } else if (this.isCurrentPrivateMessagePreflightRequest(url)) {
       this.failPrivateMessagePreflight('暂时无法打开 4D4Y 私信表单，请检查网络后重试。');
     }
@@ -496,7 +618,9 @@ export struct PrivateMessageDetailPage {
       const rawResult: string = await this.privateMessageWebController.runJavaScript(
         this.getPrivateMessagePreflightExtractionScript(expectedSequence, participantUserId)
       );
-      if (!this.isPrivateMessageFormLoading || expectedSequence !== this.privateMessageFormSequence ||
+      if (!this.isPrivateMessageRouteReady ||
+        this.routeSessionGeneration !== this.accountState.getSessionGeneration() ||
+        !this.isPrivateMessageFormLoading || expectedSequence !== this.privateMessageFormSequence ||
         this.route.participantUserId !== participantUserId) {
         return;
       }
@@ -546,13 +670,18 @@ export struct PrivateMessageDetailPage {
   }
 
   private canSubmitPrivateMessage(): boolean {
-    return this.isLoggedIn && this.isPrivateMessageFormReady && !this.isPrivateMessageFormLoading &&
-      !this.isPrivateMessageSending && this.privateMessageCooldownSeconds === 0 &&
+    return this.isPrivateMessageRouteReady &&
+      this.routeSessionGeneration === this.accountState.getSessionGeneration() &&
+      this.isLoggedIn && this.isPrivateMessageFormReady && !this.isPrivateMessageFormLoading &&
+      !this.isPrivateMessageSending && !this.isClearingConversation && this.privateMessageCooldownSeconds === 0 &&
       this.privateMessageDraft.trim().length > 0;
   }
 
   private beginPrivateMessageSubmission(preflightSequence: number, participantUserId: string): void {
-    if (this.privateMessageWebOperation !== PrivateMessageWebOperation.Submit ||
+    if (this.isPrivateMessageSending || !this.isPrivateMessageRouteReady ||
+      this.routeSessionGeneration !== this.accountState.getSessionGeneration() ||
+      participantUserId !== this.route.participantUserId ||
+      this.privateMessageWebOperation !== PrivateMessageWebOperation.Submit ||
       preflightSequence !== this.privateMessageFormSequence || this.pendingPrivateMessage.length === 0) {
       return;
     }
@@ -587,7 +716,9 @@ export struct PrivateMessageDetailPage {
       const rawResult: string = await this.privateMessageWebController.runJavaScript(
         this.getPrivateMessageSubmissionResultScript(participantUserId, expectedSubmissionSequence)
       );
-      if (!this.isPrivateMessageSending || expectedSubmissionSequence !== this.privateMessageSubmissionSequence ||
+      if (!this.isPrivateMessageRouteReady ||
+        this.routeSessionGeneration !== this.accountState.getSessionGeneration() ||
+        !this.isPrivateMessageSending || expectedSubmissionSequence !== this.privateMessageSubmissionSequence ||
         this.route.participantUserId !== participantUserId) {
         return;
       }
@@ -725,7 +856,7 @@ export struct PrivateMessageDetailPage {
       this.privateMessageConversationRefreshTimeoutId = -1;
       if (this.isPrivateMessageRouteReady && this.route.participantUserId === participantUserId &&
         !this.isRequestPending()) {
-        this.loadConversation(true);
+        this.loadConversation(true, true);
       }
     }, 900);
   }
@@ -746,13 +877,14 @@ export struct PrivateMessageDetailPage {
       '  const loginForm = !!document.querySelector("form[action*=logging], input[name=username], input[name=password]");',
       '  const challenge = !!document.querySelector("iframe[src*=challenge], #challenge-form, .cf-turnstile, [data-sitekey]");',
       '  const pageUrl = asUrl(location.href);',
+      '  if (pageUrl.origin !== "https://www.4d4y.com" || pageUrl.pathname !== "/forum/pm.php" || pageUrl.searchParams.getAll("uid").length !== 1 || pageUrl.searchParams.get("uid") !== participantUserId || pageUrl.searchParams.getAll("oh_pm_compose").length !== 1 || pageUrl.searchParams.get("oh_pm_compose") !== "' + sequence + '") return "";',
       '  const forms = Array.from(document.forms || []);',
       '  const form = forms.find((candidate) => {',
       '    const action = asUrl(candidate.getAttribute("action") || location.href);',
       '    const uid = action.searchParams.get("uid") || pageUrl.searchParams.get("uid") || "";',
       '    const kind = action.searchParams.get("action") || pageUrl.searchParams.get("action") || "";',
       '    return action.origin === "https://www.4d4y.com" && action.pathname === "/forum/pm.php" && kind === "send" && uid === participantUserId;',
-      '  }) || forms.find((candidate) => candidate.querySelector("textarea[name=message]") !== null) || null;',
+      '  }) || null;',
       '  const action = form ? asUrl(form.getAttribute("action") || location.href) : pageUrl;',
       '  const actionParticipantUserId = action.searchParams.get("uid") || pageUrl.searchParams.get("uid") || "";',
       '  const actionKind = action.searchParams.get("action") || pageUrl.searchParams.get("action") || "";',
@@ -780,8 +912,11 @@ export struct PrivateMessageDetailPage {
       '(() => {',
       '  const participantUserId = ' + safeParticipantUserId + ';',
       '  const messageValue = ' + safeMessage + ';',
+      '  const expectedPreflight = "' + this.privateMessageFormSequence + '";',
+      '  const expectedSubmission = "' + this.privateMessageSubmissionSequence + '";',
       '  const asUrl = (value) => { try { return new URL(value || location.href, location.href); } catch (_) { return new URL(location.href); } };',
       '  const pageUrl = asUrl(location.href);',
+      '  if (pageUrl.origin !== "https://www.4d4y.com" || pageUrl.pathname !== "/forum/pm.php" || pageUrl.searchParams.getAll("uid").length !== 1 || pageUrl.searchParams.get("uid") !== participantUserId || pageUrl.searchParams.getAll("oh_pm_compose").length !== 1 || pageUrl.searchParams.get("oh_pm_compose") !== expectedPreflight || window.__hipdaPmSubmitted) throw new Error("pm-document-not-current");',
       '  const form = Array.from(document.forms || []).find((candidate) => {',
       '    const action = asUrl(candidate.getAttribute("action") || location.href);',
       '    const uid = action.searchParams.get("uid") || pageUrl.searchParams.get("uid") || "";',
@@ -790,15 +925,17 @@ export struct PrivateMessageDetailPage {
       '  }) || null;',
       '  const message = form ? form.querySelector("textarea[name=message]") : null;',
       '  const formhash = form ? form.querySelector("input[name=formhash]") : null;',
-      '  if (!form || !message || !formhash) throw new Error("pm-form-not-ready");',
+      '  if (!form || !message || !formhash || !formhash.value || (form.method || "").toLowerCase() !== "post") throw new Error("pm-form-not-ready");',
       '  const action = asUrl(form.getAttribute("action") || location.href);',
       '  if (action.origin !== "https://www.4d4y.com" || action.pathname !== "/forum/pm.php") throw new Error("pm-action-not-allowed");',
       '  action.searchParams.set("action", "send"); action.searchParams.set("uid", participantUserId);',
+      '  action.searchParams.set("oh_pm_submit", expectedSubmission);',
       '  form.action = action.toString(); message.value = messageValue;',
       '  const ensure = (name, value) => { let field = form.querySelector("[name=\\\"" + name + "\\\"]"); if (!field) { field = document.createElement("input"); field.type = "hidden"; field.name = name; form.appendChild(field); } field.value = value; };',
       '  if (!form.querySelector("input[name=lastdaterange]")) ensure("lastdaterange", String(Date.now()));',
       '  ensure("handlekey", "pmreply"); ensure("pmsubmit", "yes"); ensure("infloat", "yes"); ensure("inajax", "1");',
-      '  form.submit();',
+      '  window.__hipdaPmSubmitted = true;',
+      '  HTMLFormElement.prototype.submit.call(form);',
       '})()'
     ].join('\n');
   }
@@ -808,6 +945,8 @@ export struct PrivateMessageDetailPage {
     const safeParticipantUserId: string = JSON.stringify(participantUserId);
     return [
       '(() => {',
+      '  const pageUrl = new URL(location.href);',
+      '  if (pageUrl.origin !== "https://www.4d4y.com" || pageUrl.pathname !== "/forum/pm.php" || pageUrl.searchParams.getAll("uid").length !== 1 || pageUrl.searchParams.get("uid") !== ' + safeParticipantUserId + ' || pageUrl.searchParams.getAll("action").length !== 1 || pageUrl.searchParams.get("action") !== "send" || pageUrl.searchParams.getAll("oh_pm_submit").length !== 1 || pageUrl.searchParams.get("oh_pm_submit") !== "' + submissionSequence + '") return "";',
       '  const loginRequired = !!document.querySelector("form[action*=logging], input[name=username], input[name=password]");',
       '  const alert = document.querySelector(".alert_info, .alert_error, #messagetext");',
       '  const text = (node) => node ? (node.innerText || node.textContent || "").trim() : "";',
@@ -819,8 +958,10 @@ export struct PrivateMessageDetailPage {
     ].join('\n');
   }
 
-  private async loadConversation(keepVisible: boolean = false): Promise<void> {
-    if (this.isLoading || this.isRefreshing) {
+  private async loadConversation(keepVisible: boolean = false, scrollToLatest: boolean = false): Promise<void> {
+    if (!this.isPrivateMessageRouteReady ||
+      this.routeSessionGeneration !== this.accountState.getSessionGeneration() ||
+      this.isLoading || this.isRefreshing || this.isClearingConversation) {
       return;
     }
     const participantUserId: string = this.route.participantUserId;
@@ -842,7 +983,9 @@ export struct PrivateMessageDetailPage {
     try {
       const result: FourD4yNativePrivateConversationResult = await this.nativeClient.loadPrivateConversation(
         requestUrl, expectedLoadSequence);
-      if (!this.isRequestPending() || this.loadSequence !== expectedLoadSequence ||
+      if (!this.isPrivateMessageRouteReady ||
+        this.routeSessionGeneration !== this.accountState.getSessionGeneration() ||
+        !this.isRequestPending() || this.loadSequence !== expectedLoadSequence ||
         this.terminalLoadSequence === expectedLoadSequence || this.route.participantUserId !== participantUserId) {
         return;
       }
@@ -887,11 +1030,26 @@ export struct PrivateMessageDetailPage {
       this.isRefreshing = false;
       this.preservesVisibleContent = false;
       this.isLoggedIn = true;
-      this.messages = payload.messages;
+      this.viewerUserId = payload.viewerUserId;
+      this.canClearConversation = payload.clearAvailable === true;
+      this.messages = this.messageRowVersions.track(payload.messages);
+      if ((!keepVisible || scrollToLatest) && this.messages.length > 0) {
+        // NG's SmsFragment opens at the latest message and follows a sent
+        // message. Read-state-only refreshes preserve the user's position.
+        this.getUIContext().postFrameCallback(new ConversationLayoutCallback(() => {
+          if (this.isPrivateMessageRouteReady && this.loadSequence === expectedLoadSequence &&
+            this.routeSessionGeneration === this.accountState.getSessionGeneration() &&
+            this.route.participantUserId === participantUserId && this.messages.length > 0) {
+            this.conversationScroller.scrollToIndex(this.messages.length - 1, false, ScrollAlign.END);
+          }
+        }));
+      }
       this.statusMessage = outcome === FourD4yPrivateConversationReaderOutcome.Empty ? '暂无与该用户的私信记录。' : '';
       this.scheduleReadConfirmationIfNeeded(payload, participantUserId);
     } catch (_error) {
-      if (this.isRequestPending() && this.loadSequence === expectedLoadSequence) {
+      if (this.isPrivateMessageRouteReady &&
+        this.routeSessionGeneration === this.accountState.getSessionGeneration() &&
+        this.isRequestPending() && this.loadSequence === expectedLoadSequence) {
         this.failLoad(expectedLoadSequence, '暂时无法读取私信会话，请稍后重试。');
       }
     }
@@ -929,10 +1087,13 @@ export struct PrivateMessageDetailPage {
       return;
     }
     this.hasScheduledReadConfirmation = true;
+    const generation: number = this.routeSessionGeneration;
     this.clearReadConfirmation();
     this.readConfirmationTimeoutId = setTimeout(() => {
       this.readConfirmationTimeoutId = -1;
-      if (!this.isRequestPending() && this.route.participantUserId === participantUserId) {
+      if (this.isPrivateMessageRouteReady && !this.isRequestPending() &&
+        generation === this.accountState.getSessionGeneration() &&
+        this.route.participantUserId === participantUserId) {
         this.loadConversation(true);
       }
     }, 700);
@@ -946,7 +1107,8 @@ export struct PrivateMessageDetailPage {
   }
 
   private failLoad(loadSequence: number, message: string): void {
-    if (this.loadSequence !== loadSequence) {
+    if (!this.isPrivateMessageRouteReady ||
+      this.routeSessionGeneration !== this.accountState.getSessionGeneration() || this.loadSequence !== loadSequence) {
       return;
     }
     this.clearLoadWatchdog();
@@ -956,8 +1118,10 @@ export struct PrivateMessageDetailPage {
     this.isRefreshing = false;
     this.preservesVisibleContent = false;
     if (!preservesVisibleContent) {
-      this.messages = [];
-      this.statusMessage = message;
+      this.messages = this.messageRowVersions.track([]);
     }
+    // Keep the visible conversation on a background failure, but do not
+    // silently disguise a failed read-state confirmation as a successful one.
+    this.statusMessage = message;
   }
 }

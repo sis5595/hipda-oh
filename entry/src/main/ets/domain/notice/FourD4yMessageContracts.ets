@@ -119,11 +119,14 @@ export function isExpectedFourD4yMessagePagePayload(payload: FourD4yMessagePageP
 
 export function isExpectedFourD4yMessagePromptPayload(payload: FourD4yMessagePromptPayload,
   loadSequence: number): boolean {
+  // A successful HTTP response may still be a challenge or an unrelated page.
+  // Its parser defaults are not server-confirmed zeros. Preserve prior counts,
+  // as NG does when fetching/parsing notifications fails.
   return payload.loadSequence === loadSequence && isNonNegativeInteger(payload.privateMessageCount) &&
     isNonNegativeInteger(payload.threadNoticeCount) && isNonNegativeInteger(payload.systemNoticeCount) &&
     isNonNegativeInteger(payload.friendNoticeCount) &&
-    isFourD4yPageAccessState(payload.accessState) && typeof payload.hasChallenge === 'boolean' &&
-    typeof payload.promptFound === 'boolean';
+    payload.accessState === FourD4yPageAccessState.Available && payload.hasChallenge === false &&
+    payload.promptFound === true;
 }
 
 export function getFourD4yMessageReaderOutcome(payload: FourD4yMessagePagePayload): FourD4yMessageReaderOutcome {

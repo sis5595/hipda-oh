@@ -16,13 +16,16 @@ export struct ReadingHistoryPage {
 
   private readonly forums: ForumSummary[] = getFourD4yForums();
   private historyListenerId: number = -1;
+  private isHistoryPageAlive: boolean = false;
 
   aboutToAppear(): void {
+    this.isHistoryPageAlive = true;
     this.subscribeToHistory();
     void this.loadHistory();
   }
 
   aboutToDisappear(): void {
+    this.isHistoryPageAlive = false;
     this.unsubscribeFromHistory();
   }
 
@@ -143,28 +146,47 @@ export struct ReadingHistoryPage {
   private async loadHistory(): Promise<void> {
     try {
       await this.readHistoryState.load(this.getUIContext().getHostContext() as common.Context);
+    } catch (_error) {
+      this.showHistoryError('读取浏览记录失败，请返回后重试。');
     } finally {
-      this.syncEntries();
-      this.isLoading = false;
+      if (this.isHistoryPageAlive) {
+        this.syncEntries();
+        this.isLoading = false;
+      }
     }
   }
 
   private async clearHistory(): Promise<void> {
-    if (this.isClearing || this.entries.length === 0) {
+    if (!this.isHistoryPageAlive || this.isClearing || this.entries.length === 0) {
       return;
     }
     this.isClearing = true;
     try {
       await this.readHistoryState.clear(this.getUIContext().getHostContext() as common.Context);
+    } catch (_error) {
+      this.showHistoryError('清空浏览记录未成功，请重试。');
     } finally {
-      this.syncEntries();
-      this.isClearing = false;
+      if (this.isHistoryPageAlive) {
+        this.syncEntries();
+        this.isClearing = false;
+      }
     }
   }
 
   private openEntry(entry: FourD4yReadHistoryEntry): void {
     this.pathStack.pushPathByName('ThreadDetail', createThreadRouteParams(
       entry.threadId, entry.title, 0, entry.lastReadPage, entry.lastReadFloor, entry.forumId));
+  }
+
+  private showHistoryError(message: string): void {
+    if (!this.isHistoryPageAlive) {
+      return;
+    }
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // Feedback failure must not reject the handled storage operation.
+    }
   }
 
   private getForumName(forumId: string): string {
@@ -189,6 +211,8 @@ export struct ReadingHistoryPage {
   }
 
   private syncEntries(): void {
-    this.entries = this.readHistoryState.getEntries();
+    if (this.isHistoryPageAlive) {
+      this.entries = this.readHistoryState.getEntries();
+    }
   }
 }

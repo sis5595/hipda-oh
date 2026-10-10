@@ -1,4 +1,5 @@
 import { FourD4yPageAccessState } from '../../domain/reader/FourD4yReaderContracts';
+import { extractFourD4yViewerUserId } from './FourD4yViewerIdentityParser';
 import { FourD4yPrivateConversationMessage, FourD4yPrivateConversationPayload,
   FourD4yPrivateMessageSegment,
   isAllowedFourD4yPrivateConversationUrl,
@@ -7,7 +8,7 @@ import { FourD4yPrivateConversationMessage, FourD4yPrivateConversationPayload,
 
 /**
  * Parser for the GET-only PM conversation page.  NG selects `li.s_clear`
- * below `ul.pm_list`; MY 4D4Y retains the same layout in its HAP bundle.
+ * below `ul.pm_list`, matching the observed 4D4Y conversation template.
  * Values only leave this parser: source HTML and cookies are never retained.
  */
 export function parseFourD4yPrivateConversationPage(html: string, requestUrl: string,
@@ -17,7 +18,7 @@ export function parseFourD4yPrivateConversationPage(html: string, requestUrl: st
     !isAllowedFourD4yPrivateConversationUrl(requestUrl) || loadSequence < 1) {
     return null;
   }
-  const viewerUserId: string = extractViewerUserId(html);
+  const viewerUserId: string = extractFourD4yViewerUserId(html);
   const messages: FourD4yPrivateConversationMessage[] = parseConversationMessages(html, viewerUserId);
   return {
     loadSequence: loadSequence,
@@ -29,8 +30,50 @@ export function parseFourD4yPrivateConversationPage(html: string, requestUrl: st
     conversationLayoutFound: /<ul\b[^>]*\bclass=["'][^"']*\bpm_list\b[^"']*["']/i.test(html) ||
       /<li\b[^>]*\bclass=["'][^"']*\bs_clear\b[^"']*["']/i.test(html) || hasEmptyConversation(html),
     errorMessage: extractPageMessage(html),
+    clearAvailable: extractFourD4yPrivateConversationClearUrl(html, participantUserId).length > 0,
     messages: messages
   };
+}
+
+/** Only a live conversation-header control can authorize the separate mutation transport. */
+export function extractFourD4yPrivateConversationClearUrl(html: string, participantUserId: string): string {
+  if (!/^[1-9]\d{0,15}$/.test(participantUserId)) return '';
+  const clean: string = html.replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  // Start at the header itself: an outer wrap div must not consume its match.
+  const messagesStart: RegExpMatchArray | null = clean.match(/<(?:div\b[^>]*\sid\s*=\s*["']pmlist["']|ul\b[^>]*\sclass\s*=\s*["'][^"']*\bpm_list\b)/i);
+  const controls: string = messagesStart === null ? '' : clean.slice(0, messagesStart.index);
+  const header: RegExpMatchArray | null = controls.match(
+    /<div\b[^>]*\sclass\s*=\s*["'][^"']*\bnewpm_notice\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+  if (header === null) return '';
+  const anchors: RegExp = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  let anchor: RegExpExecArray | null = anchors.exec(header[1]);
+  while (anchor !== null) {
+    const label: string = anchor[2].replace(/<[^>]+>/g, '').trim();
+    const href: string = extractHtmlAttribute(anchor[1], 'href').replace(/&amp;/gi, '&');
+    const target: RegExpMatchArray | null = href.match(
+      /^(?:https:\/\/www\.4d4y\.com\/forum\/|\/forum\/|\.\/)?pm\.php\?action=del&uid=([1-9]\d{0,15})&filter=(privatepm)?$/i);
+    if (target !== null && target[1] === participantUserId && /^清空(?:短消息|私信)?$/.test(label) &&
+      /\bconfirm\s*\(/.test(extractHtmlAttribute(anchor[1], 'onclick'))) {
+      return 'https://www.4d4y.com/forum/pm.php?action=del&uid=' + target[1] + '&filter=' + (target[2] || '');
+    }
+    anchor = anchors.exec(header[1]);
+  }
+  return '';
+}
+
+/** A blank/malformed list is not proof that a destructive operation succeeded. */
+export function isConfirmedFourD4yEmptyPrivateConversation(html: string): boolean {
+  const clean: string = html.replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  const scope: RegExpMatchArray | null = clean.match(/<div\b[^>]*\sid\s*=\s*["']pmlist["'][^>]*>([\s\S]*)/i);
+  if (scope === null) return false;
+  const list: RegExpMatchArray | null = scope[1].match(
+    /<ul\b[^>]*\sclass\s*=\s*["'][^"']*\bpm_list\b[^"']*["'][^>]*>([\s\S]*?)<\/ul>/i);
+  if (list === null || /\b(?:s_clear|summary|cite)\b/i.test(list[1])) return false;
+  const text: string = toPlainText(list[1]);
+  return text.length > 0 && text.length < 240 &&
+    /(?:暂无|没有|不存在)[^。\n]{0,60}(?:短消息|私信|消息记录)|no\s+(?:messages|records)/i.test(text);
 }
 
 function parseConversationMessages(html: string, viewerUserId: string): FourD4yPrivateConversationMessage[] {
@@ -66,6 +109,14 @@ function parseConversationMessage(rowHtml: string, viewerUserId: string,
     return null;
   }
   const sender: FourD4yPrivateConversationSender = extractSender(citeMatch[1], rowHtml);
+  // Observed 4D4Y/Discuz pm_node omits href for the viewer and marks the
+  // outer message li as self. Never infer identity from a name/body class,
+  // nor overwrite a conflicting explicit UID with this presentation marker.
+  const rowTag: RegExpMatchArray | null = rowHtml.match(/^<li\b([^>]*)>/i);
+  if (sender.userId.length === 0 && viewerUserId.length > 0 && rowTag !== null &&
+    extractHtmlAttribute(rowTag[1], 'class').split(/\s+/).indexOf('self') >= 0) {
+    sender.userId = viewerUserId;
+  }
   const serverId: string = extractMessageId(rowHtml);
   const content: FourD4yPrivateMessageContent = parsePrivateMessageContent(summaryMatch[1]);
   return {
@@ -76,8 +127,22 @@ function parseConversationMessage(rowHtml: string, viewerUserId: string,
     segments: content.segments.length > 0 ? content.segments : undefined,
     occurredAt: extractTime(citeMatch[1]),
     isMine: sender.userId.length > 0 && sender.userId === viewerUserId,
-    isUnread: /(?:notice_)?newpm\.gif|\bclass=["'][^"']*\bnew\b[^"']*["']|font-weight\s*:\s*bold/i.test(rowHtml)
+    isUnread: hasUnreadMessageIcon(citeMatch[1])
   };
+}
+
+/** NG reads the status image in p.cite, not arbitrary markup in the message. */
+function hasUnreadMessageIcon(citeHtml: string): boolean {
+  const imagePattern: RegExp = /<img\b([^>]*)>/gi;
+  let match: RegExpExecArray | null = imagePattern.exec(citeHtml);
+  while (match !== null) {
+    const source: string = extractHtmlAttribute(match[1], 'src');
+    if (/(?:^|\/)(?:notice_)?newpm\.gif(?:[?#]|$)/i.test(source)) {
+      return true;
+    }
+    match = imagePattern.exec(citeHtml);
+  }
+  return false;
 }
 
 interface FourD4yPrivateMessageContent {
@@ -129,9 +194,9 @@ function appendPrivateMessageText(html: string, segments: FourD4yPrivateMessageS
 }
 
 function extractHtmlAttribute(attributes: string, name: string): string {
-  const pattern: RegExp = new RegExp('\\b' + name + '=["\\\']([^"\\\']*)["\\\']', 'i');
+  const pattern: RegExp = new RegExp('(?:^|\\s)' + name + '\\s*=\\s*(["\\\'])([\\s\\S]*?)\\1', 'i');
   const match: RegExpMatchArray | null = attributes.match(pattern);
-  return match === null ? '' : decodeHtml(match[1]).trim();
+  return match === null ? '' : decodeHtml(match[2]).trim();
 }
 
 function normalizeFourD4ySmilieUrl(source: string): string {
@@ -198,8 +263,10 @@ function extractSender(citeHtml: string, rowHtml: string): FourD4yPrivateConvers
       return { userId: uid, name: name };
     }
   }
+  // The self cite can be plain text. Capture all avatar attributes: href
+  // commonly follows class, so a capture ending before class loses the UID.
   const avatarAnchor: RegExpMatchArray | null = rowHtml.match(
-    /<a\b([^>]*)\bclass=["'][^"']*\bavatar\b[^"']*["'][^>]*>/i);
+    /<a\b([^>]*\bclass=["'][^"']*\bavatar\b[^"']*["'][^>]*)>/i);
   const senderName: string = toPlainText(citeHtml.replace(/<img\b[^>]*>/gi, ' ')).slice(0, 120);
   return {
     userId: avatarAnchor === null ? '' : extractUserId(extractHref(avatarAnchor[1])),
@@ -231,22 +298,6 @@ function extractHref(attributes: string): string {
 function extractUserId(value: string): string {
   const match: RegExpMatchArray | null = value.match(/[?&]uid=(\d+)(?:&|$)/i);
   return match === null ? '' : match[1];
-}
-
-function extractViewerUserId(html: string): string {
-  const patterns: RegExp[] = [
-    /discuz_uid\s*=\s*["']?(\d+)["']?/i,
-    /\buid\s*=\s*(\d+)/i,
-    /space\.php\?uid=(\d+)/i,
-    /home\.php\?mod=space&(?:amp;)?uid=(\d+)/i
-  ];
-  for (let index: number = 0; index < patterns.length; index += 1) {
-    const match: RegExpMatchArray | null = html.match(patterns[index]);
-    if (match !== null) {
-      return match[1];
-    }
-  }
-  return '';
 }
 
 function isLoginPage(html: string): boolean {

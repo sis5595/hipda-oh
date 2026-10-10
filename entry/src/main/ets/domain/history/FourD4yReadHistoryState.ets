@@ -35,23 +35,33 @@ export class FourD4yReadHistoryState {
 
   async record(context: common.Context, entry: FourD4yReadHistoryEntry): Promise<void> {
     await this.load(context);
-    this.entries = addFourD4yReadHistoryEntry(this.entries, entry);
-    this.notifyListeners();
-    const snapshot: FourD4yReadHistoryEntry[] = this.getEntries();
-    this.writeQueue = this.writeQueue.then(async () => {
-      await FourD4yReadHistoryStore.save(context, snapshot);
+    const requestedEntry: FourD4yReadHistoryEntry = copyReadHistoryEntry(entry);
+    await this.enqueueWrite(async () => {
+      const snapshot: FourD4yReadHistoryEntry[] = addFourD4yReadHistoryEntry(this.entries, requestedEntry);
+      if (!await FourD4yReadHistoryStore.save(context, snapshot)) {
+        throw new Error('read-history-save-failed');
+      }
+      this.entries = snapshot;
+      this.notifyListeners();
     });
-    await this.writeQueue;
   }
 
   async clear(context: common.Context): Promise<void> {
     await this.load(context);
-    this.entries = [];
-    this.notifyListeners();
-    this.writeQueue = this.writeQueue.then(async () => {
-      await FourD4yReadHistoryStore.clear(context);
+    await this.enqueueWrite(async () => {
+      if (!await FourD4yReadHistoryStore.clear(context)) {
+        throw new Error('read-history-clear-failed');
+      }
+      this.entries = [];
+      this.notifyListeners();
     });
-    await this.writeQueue;
+  }
+
+  private enqueueWrite(operation: () => Promise<void>): Promise<void> {
+    const result: Promise<void> = this.writeQueue.then(operation);
+    // Report this operation's failure but keep later retries executable.
+    this.writeQueue = result.then(() => {}, () => {});
+    return result;
   }
 
   subscribe(listener: FourD4yReadHistoryListener): number {
@@ -70,8 +80,8 @@ export class FourD4yReadHistoryState {
   private async loadOnce(context: common.Context): Promise<void> {
     try {
       this.entries = await FourD4yReadHistoryStore.load(context);
-    } finally {
       this.isLoaded = true;
+    } finally {
       this.loadingPromise = null;
       this.notifyListeners();
     }

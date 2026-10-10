@@ -1,9 +1,11 @@
+import { FourD4yCollectionCache } from '../favorite/FourD4yCollectionCache';
 /**
- * Session-only mirror of topic IDs confirmed by the 4D4Y attention list.
- * It deliberately stores no cookies, HTML, formhash, or account data.
+ * Account-bound mirror of topic IDs confirmed by the 4D4Y attention list.
+ * It deliberately stores no cookies, HTML, formhash, or account credentials.
  */
 export class FourD4yAttentionState {
-  private readonly attentionThreadIds: Set<string> = new Set<string>();
+  readonly cache: FourD4yCollectionCache = new FourD4yCollectionCache();
+  private readonly attentionThreadIds: FourD4yCollectionCache = this.cache;
   private readonly mutationListeners: Map<number, FourD4yAttentionMutationListener> =
     new Map<number, FourD4yAttentionMutationListener>();
   private nextMutationListenerId: number = 1;
@@ -24,10 +26,9 @@ export class FourD4yAttentionState {
     }
   }
 
-  observeServerAttentions(threadIds: string[]): void {
-    threadIds.forEach((threadId: string) => {
-      this.markAttentioned(threadId);
-    });
+  observeServerAttentions(threadIds: string[], page: number = 0, lastPage: number = 0,
+    source?: Object): void {
+    this.attentionThreadIds.observePage(threadIds, page, lastPage, source);
   }
 
   clear(): void {

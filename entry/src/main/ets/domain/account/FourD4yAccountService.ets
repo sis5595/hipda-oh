@@ -9,6 +9,7 @@ export enum FourD4yAccountSaveResult {
   Saved = 'saved',
   AccountLimit = 'accountLimit',
   SessionUnavailable = 'sessionUnavailable',
+  VerificationExpired = 'verificationExpired',
   StorageFailed = 'storageFailed'
 }
 
@@ -17,13 +18,71 @@ export enum FourD4yAccountSaveResult {
  * asset. It never asks for, receives, or stores a password.
  */
 export class FourD4yAccountService {
-  static async saveVerifiedCurrentSession(context: common.Context, identity: FourD4yAccountIdentity):
-    Promise<FourD4yAccountSaveResult> {
-    const sessionSecret: string | null = await FourD4ySession.captureAccountSessionSecret();
-    if (sessionSecret === null) {
-      return FourD4yAccountSaveResult.SessionUnavailable;
+  private static saveTail: Promise<void> = Promise.resolve();
+
+  // Called only behind the privacy gate, before any forum UI is mounted.
+  // This restores a credential, not a verified server identity. Existing
+  // cookies win; rejected/expired credentials retain the normal login path.
+  static async restoreStartupSession(context: common.Context, isCurrent: () => boolean): Promise<void> {
+    try {
+      if (!isCurrent() || await FourD4ySession.getAuthenticationState() !== 'absent' || !isCurrent()) {
+        return;
+      }
+      const registry: FourD4yAccountRegistry = await FourD4yAccountProfileStore.load(context);
+      if (!isCurrent() || registry.activeProfileId.length === 0 ||
+        !registry.profiles.some((profile: FourD4yAccountProfile) => profile.id === registry.activeProfileId)) {
+        return;
+      }
+      const secret: string | null = await FourD4yAccountSessionStore.load(registry.activeProfileId);
+      if (!isCurrent() || secret === null ||
+        await FourD4ySession.getAuthenticationState() !== 'absent' || !isCurrent()) {
+        return;
+      }
+      await FourD4ySession.restoreAccountSessionSecret(secret);
+    } catch (_error) {
+      // Locked/unavailable Asset or Preferences must not erase saved accounts
+      // or block application startup. A manual login remains available.
     }
-    const before: FourD4yAccountRegistry = await FourD4yAccountProfileStore.load(context);
+  }
+
+  static async forgetStartupSelection(context: common.Context,
+    isCurrent: () => boolean = () => true): Promise<void> {
+    const registry: FourD4yAccountRegistry = await FourD4yAccountProfileStore.load(context);
+    if (!isCurrent()) {
+      return;
+    }
+    registry.activeProfileId = '';
+    if (!await FourD4yAccountProfileStore.save(context, registry, isCurrent)) {
+      throw new Error('account-selection-clear-failed');
+    }
+  }
+
+  static async saveVerifiedCurrentSession(context: common.Context, identity: FourD4yAccountIdentity,
+    sessionSecret: string, isCurrentVerification: () => boolean):
+    Promise<FourD4yAccountSaveResult> {
+    // Identity and secret are the caller's same verified observation. Never
+    // recapture cookies later and accidentally label a new account with an old UID.
+    const result: Promise<FourD4yAccountSaveResult> = FourD4yAccountService.saveTail.then(() =>
+      FourD4yAccountService.saveVerifiedSessionLocked(context, identity, sessionSecret, isCurrentVerification));
+    FourD4yAccountService.saveTail = result.then(() => {}, () => {});
+    return result;
+  }
+
+  private static async saveVerifiedSessionLocked(context: common.Context, identity: FourD4yAccountIdentity,
+    sessionSecret: string, isCurrentVerification: () => boolean): Promise<FourD4yAccountSaveResult> {
+    if (!isCurrentVerification() || !await FourD4ySession.isCurrentAccountSessionSecret(sessionSecret) ||
+      !isCurrentVerification()) {
+      return FourD4yAccountSaveResult.VerificationExpired;
+    }
+    let before: FourD4yAccountRegistry;
+    try {
+      before = await FourD4yAccountProfileStore.load(context);
+    } catch (_error) {
+      return FourD4yAccountSaveResult.StorageFailed;
+    }
+    if (!isCurrentVerification()) {
+      return FourD4yAccountSaveResult.VerificationExpired;
+    }
     const next: FourD4yAccountRegistry | null = upsertFourD4yAccountProfile(before, identity, Date.now());
     if (next === null) {
       return FourD4yAccountSaveResult.AccountLimit;
@@ -33,7 +92,16 @@ export class FourD4yAccountService {
     if (profile === undefined || !await FourD4yAccountSessionStore.save(profile.id, sessionSecret)) {
       return FourD4yAccountSaveResult.StorageFailed;
     }
-    if (await FourD4yAccountProfileStore.save(context, next)) {
+    if (!isCurrentVerification() || !await FourD4ySession.isCurrentAccountSessionSecret(sessionSecret) ||
+      !isCurrentVerification()) {
+      // A completed save still belongs to the verified UID, but it must not
+      // select that account after the page or live authentication has changed.
+      if (before.profiles.findIndex((item: FourD4yAccountProfile) => item.id === profile.id) < 0) {
+        await FourD4yAccountSessionStore.remove(profile.id);
+      }
+      return FourD4yAccountSaveResult.VerificationExpired;
+    }
+    if (await FourD4yAccountProfileStore.save(context, next, isCurrentVerification)) {
       return FourD4yAccountSaveResult.Saved;
     }
     // If a brand-new profile cannot be listed, remove its otherwise orphaned
@@ -41,11 +109,13 @@ export class FourD4yAccountService {
     if (before.profiles.findIndex((item: FourD4yAccountProfile) => item.id === profile.id) < 0) {
       await FourD4yAccountSessionStore.remove(profile.id);
     }
-    return FourD4yAccountSaveResult.StorageFailed;
+    return isCurrentVerification() ? FourD4yAccountSaveResult.StorageFailed :
+      FourD4yAccountSaveResult.VerificationExpired;
   }
 
-  static async activateSavedSession(profileId: string): Promise<boolean> {
+  static async activateSavedSession(profileId: string, isCurrentOperation: () => boolean): Promise<boolean> {
     const sessionSecret: string | null = await FourD4yAccountSessionStore.load(profileId);
-    return sessionSecret !== null && await FourD4ySession.restoreAccountSessionSecret(sessionSecret);
+    return isCurrentOperation() && sessionSecret !== null &&
+      await FourD4ySession.restoreAccountSessionSecret(sessionSecret);
   }
 }

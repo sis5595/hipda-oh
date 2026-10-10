@@ -173,6 +173,11 @@ export function buildFourD4ySearchPostTargetUrl(threadId: string, postId: string
   if ((threadId.length > 0 && !isDigitsOnly(threadId)) || !isDigitsOnly(postId)) {
     return null;
   }
+  // NG HiUtils.GotoPostUrl: an unknown topic requires the PID-only endpoint.
+  // redirect.php's findpost contract requires a real ptid, not an empty one.
+  if (threadId.length === 0) {
+    return 'https://www.4d4y.com/forum/gotopost.php?pid=' + postId;
+  }
   return 'https://www.4d4y.com/forum/redirect.php?goto=findpost&ptid=' + threadId + '&pid=' + postId;
 }
 
@@ -193,7 +198,7 @@ export function buildFourD4ySearchPostViewUrl(threadId: string, postId: string):
 
 /** Only the forum's bounded, same-origin find-post targets may be followed. */
 export function isAllowedFourD4ySearchPostTargetUrl(url: string): boolean {
-  return /^https:\/\/www\.4d4y\.com\/forum\/(?:redirect|viewthread)\.php\?(?:[^\s#]+)(?:#\S*)?$/i.test(url);
+  return /^https:\/\/www\.4d4y\.com\/forum\/(?:gotopost|redirect|viewthread)\.php\?(?:[^\s#]+)(?:#\S*)?$/i.test(url);
 }
 
 /**

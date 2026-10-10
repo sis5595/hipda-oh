@@ -25,6 +25,8 @@ export interface ForumThreadType {
 
 export interface ForumWebPayload {
   fid: string;
+  /** Empty for unfiltered lists; optional for older synthetic fixtures. */
+  filterTypeId?: string;
   page: number;
   /** The explicitly linked next board page, or 0 when the forum exposes none. */
   nextPage: number;
@@ -32,6 +34,8 @@ export interface ForumWebPayload {
   layout: string;
   threadLinkCount: number;
   forumRowCount: number;
+  /** Header-only table confirmed from the actual forum empty-page template. */
+  hasEmptyForumTable?: boolean;
   accessState: FourD4yPageAccessState;
   hasChallenge: boolean;
   /** Current board-level thread types, never inferred from individual posts. */
@@ -129,9 +133,12 @@ export function parseForumWebPayload(rawResult: string): ForumWebPayload | null 
   try {
     const payload: ForumWebPayload = JSON.parse(payloadText) as ForumWebPayload;
     if (typeof payload.fid !== 'string' || typeof payload.page !== 'number' ||
+      (payload.filterTypeId !== undefined && (typeof payload.filterTypeId !== 'string' ||
+        (payload.filterTypeId !== '' && !/^[1-9]\d*$/.test(payload.filterTypeId)))) ||
       typeof payload.nextPage !== 'number' ||
       typeof payload.loadSequence !== 'number' || typeof payload.layout !== 'string' ||
       typeof payload.threadLinkCount !== 'number' || typeof payload.forumRowCount !== 'number' ||
+      (payload.hasEmptyForumTable !== undefined && typeof payload.hasEmptyForumTable !== 'boolean') ||
       !isFourD4yPageAccessState(payload.accessState) || typeof payload.hasChallenge !== 'boolean' ||
       !Array.isArray(payload.threadTypes) || !areForumThreadTypesValid(payload.threadTypes) ||
       !Array.isArray(payload.threads) || !areWebThreadSummariesValid(payload.threads)) {
@@ -231,8 +238,9 @@ export function parseReplySubmissionPayload(rawResult: string): ReplySubmissionP
 }
 
 export function isExpectedForumWebPayload(payload: ForumWebPayload, forumId: string,
-  page: number, loadSequence: number): boolean {
-  return payload.fid === forumId && payload.page === page && payload.loadSequence === loadSequence;
+  page: number, loadSequence: number, filterTypeId: string = ''): boolean {
+  return payload.fid === forumId && payload.page === page && payload.loadSequence === loadSequence &&
+    (payload.filterTypeId || '') === filterTypeId;
 }
 
 export function isExpectedThreadWebPayload(payload: ThreadWebPayload, threadId: string,
@@ -288,6 +296,11 @@ export function getForumReaderOutcome(payload: ForumWebPayload): FourD4yReaderOu
   }
   if (payload.hasChallenge && payload.threads.length === 0) {
     return FourD4yReaderOutcome.VerificationRequired;
+  }
+  if (payload.threads.length === 0 && payload.hasEmptyForumTable === true &&
+    payload.layout === 'legacy-empty' && payload.threadLinkCount === 0 && payload.forumRowCount === 0 &&
+    payload.nextPage === 0) {
+    return FourD4yReaderOutcome.Content;
   }
   return payload.threads.length === 0 ? FourD4yReaderOutcome.UnsupportedLayout : FourD4yReaderOutcome.Content;
 }

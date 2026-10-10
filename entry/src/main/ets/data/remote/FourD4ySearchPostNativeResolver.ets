@@ -1,10 +1,11 @@
 import http from '@ohos.net.http';
 import util from '@ohos.util';
 import { FourD4ySearchPostTargetPayload, buildFourD4ySearchPostViewUrl,
-  isAllowedFourD4ySearchPostTargetUrl } from '../../domain/search/FourD4ySearchContracts';
+  buildFourD4ySearchPostTargetUrl, isAllowedFourD4ySearchPostTargetUrl } from '../../domain/search/FourD4ySearchContracts';
 import { appendFourD4ySessionId } from './FourD4yRequestCookieBridge';
 import { FourD4ySession } from './FourD4ySession';
-import { parseFourD4ySearchPostTargetPage } from './FourD4ySearchPostTargetParser';
+import { FourD4yNativeRedirectBoundary } from './FourD4yNativeRedirectBoundary';
+import { extractFourD4ySearchPostRefreshUrl, parseFourD4ySearchPostTargetPage } from './FourD4ySearchPostTargetParser';
 
 export type FourD4ySearchPostResolveStatus = 'success' | 'cookie-missing' | 'user-context-missing' |
   'server-login-required' | 'request-failed' | 'unsupported-response' | 'post-unavailable';
@@ -34,7 +35,8 @@ export class FourD4ySearchPostNativeResolver {
   async resolve(threadId: string, postId: string, resolveSequence: number,
     viewerUserId: string, referer: string = FourD4ySession.forumRoot + 'search.php'):
     Promise<FourD4ySearchPostResolveResult> {
-    const initialUrl: string | null = buildFourD4ySearchPostViewUrl(threadId, postId);
+    let initialUrl: string | null = threadId.length > 0 ? buildFourD4ySearchPostViewUrl(threadId, postId) :
+      buildFourD4ySearchPostTargetUrl('', postId);
     if (initialUrl === null || resolveSequence < 1) {
       return this.result('unsupported-response', null);
     }
@@ -51,6 +53,40 @@ export class FourD4ySearchPostNativeResolver {
     }
     const boundedReferer: string = /^https:\/\/www\.4d4y\.com\/forum\/(?:search|my|notice|pm)\.php(?:\?|$)/i.test(referer) ?
       referer : FourD4ySession.forumRoot;
+    if (threadId.length === 0) {
+      // Full-text rows may expose only PID. Discover the owning topic once,
+      // then use the same exact viewpid verification as My Replies. A redirect
+      // destination is a hint, never proof of post existence or floor number.
+      const discovery: FourD4ySearchPostHttpPage = await this.loadPage(initialUrl, cookieHeader, boundedReferer);
+      if (discovery.status !== 'success') {
+        return this.result('request-failed', null);
+      }
+      const discovered: FourD4ySearchPostTargetPayload | null = parseFourD4ySearchPostTargetPage(
+        discovery.html, discovery.finalUrl, '', postId, resolveSequence);
+      if (discovered !== null && discovered.accessState === 'loginRequired') {
+        return this.result('server-login-required', discovered);
+      }
+      const refreshUrl: string = extractFourD4ySearchPostRefreshUrl(discovery.html);
+      const refreshTopic: RegExpMatchArray | null = refreshUrl.match(
+        /^https:\/\/www\.4d4y\.com\/forum\/viewthread\.php\?[^#]*\btid=(\d+)(?:[&#]|$)/i);
+      const destinationTopic: RegExpMatchArray | null = discovery.finalUrl.match(
+        /^https:\/\/www\.4d4y\.com\/forum\/viewthread\.php\?[^#]*\btid=(\d+)(?:[&#]|$)/i);
+      // gotopost may return the owning topic's first post rather than the
+      // requested post. Only a guarded destination/meta-refresh is a hint;
+      // the second request must still prove PID and server floor together.
+      const discoveredThreadId: string = destinationTopic !== null ? destinationTopic[1] :
+        refreshTopic !== null ? refreshTopic[1] :
+        (discovered !== null && discovered.postFound ? discovered.threadId : '');
+      initialUrl = buildFourD4ySearchPostViewUrl(discoveredThreadId, postId);
+      if (initialUrl === null) {
+        return this.result(discovered !== null && discovered.errorMessage.length > 0 ?
+          'post-unavailable' : 'unsupported-response', discovered);
+      }
+      if (!await FourD4ySession.isCurrentAccountSessionSecret(cookieHeader)) {
+        return this.result('request-failed', null);
+      }
+      threadId = discoveredThreadId;
+    }
     const pageResult: FourD4ySearchPostHttpPage = await this.loadPage(initialUrl, cookieHeader, boundedReferer);
     if (pageResult.status !== 'success') {
       return this.result('request-failed', null);
@@ -82,6 +118,8 @@ export class FourD4ySearchPostNativeResolver {
       requestUrlWithSession.slice(0, fragmentIndex);
     const request: http.HttpRequest = http.createHttp();
     try {
+      const boundary: FourD4yNativeRedirectBoundary = new FourD4yNativeRedirectBoundary(requestUrl);
+      boundary.attach(request);
       const response: http.HttpResponse = await request.request(requestUrl, {
         method: http.RequestMethod.GET,
         expectDataType: http.HttpDataType.ARRAY_BUFFER,
@@ -100,14 +138,21 @@ export class FourD4ySearchPostNativeResolver {
           'Referer': referer
         }
       });
-      await FourD4ySession.acceptNativeResponseCookies(requestUrl, response.header);
+      if (!boundary.isResponseAllowed()) {
+        return { status: 'request-failed', html: '', finalUrl: '' };
+      }
+      const acceptedCookieCount: number = await FourD4ySession.acceptNativeResponseCookies(
+        requestUrl, response.header, cookieHeader);
+      if (acceptedCookieCount < 0) {
+        return { status: 'request-failed', html: '', finalUrl: '' };
+      }
       if (response.responseCode !== http.ResponseCode.OK || !(response.result instanceof ArrayBuffer)) {
         return { status: 'request-failed', html: '', finalUrl: '' };
       }
       return {
         status: 'success',
         html: this.decoder.decodeToString(new Uint8Array(response.result)),
-        finalUrl: url
+        finalUrl: boundary.getResponseUrl()
       };
     } catch (_error) {
       return { status: 'request-failed', html: '', finalUrl: '' };

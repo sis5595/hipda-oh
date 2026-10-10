@@ -1,47 +1,49 @@
-# HiPDA·OH Privacy Policy
+# HiPDA·OH 隐私政策
 
-**Last updated: 2026-09-20**
+更新日期：2026 年 10 月 10 日。
 
-The in-app Chinese text is the current authoritative privacy policy for HiPDA·OH.
-The information below is a faithful English reference for release preparation; before
-an overseas store release it must be hosted at a publicly accessible, versioned URL.
+本政策与应用内的中文隐私说明对应。
 
-## Controller and contact
+## 适用范围与联系方式
 
-HiPDA·OH is operated by **sis5595**. Contact: **sis5595@hotmail.com**.
-It is an unofficial 4D4Y forum client and is not affiliated with the forum operator.
+HiPDA·OH 是 4D4Y 论坛的非官方客户端，不隶属于论坛运营方。个人信息处理者为 sis5595，联系邮箱为 sis5595@hotmail.com。
 
-## Data and purposes
+## 处理哪些数据
 
-- Forum content and public profile data returned by 4D4Y are displayed to provide
-  forum browsing, threads, replies, private messages, notifications, favorites,
-  follows, votes, and search.
-- The current 4D4Y authenticated session is used only for actions the user initiates.
-  When the user saves an account, a session snapshot is held locally in the encrypted
-  HarmonyOS Asset Store for account switching. Forum passwords are never read or stored.
-- Appearance settings, selected quick forums, last viewed forum, search history, and
-  reading history are stored locally to restore the user experience.
-- An image selected through the system picker is read and transmitted to 4D4Y only
-  after the user explicitly chooses to upload or insert it.
+- **论坛内容和账号信息**：显示论坛返回的帖子、用户名、公开资料、私信、提醒、收藏等内容，用于提供阅读和互动功能。
+- **登录会话**：登录在论坛页面完成，应用不读取或保存论坛密码。保存账号时，会在设备的 HarmonyOS Asset Store 中加密保存已经验证的会话，供切换账号使用。原始 Cookie 不写入日志、浏览历史或导出文件。
+- **本地偏好和历史**：保存主题、字号、行距、图片加载方式、快捷版面、上次浏览版面、阅读历史和搜索历史，用于恢复使用习惯。搜索历史包含关键词、搜索方式和版面范围，不包含搜索结果正文。
+- **收藏和关注缓存**：按论坛用户 ID 隔离，分别保存最多 300 个主题 ID，帮助恢复按钮状态，不保存帖子正文或私信内容。
+- **主动选择的图片**：只有在选择并确认上传或插入时，才通过系统图片选择器读取所选图片并上传到 4D4Y。
+- **帖子外链图片**：显示时可能访问对应图片服务器，不向它们发送论坛 Cookie。查看普通外链动图时，会在应用私有缓存中暂存校验后的图片，切图或退出查看器时删除；异常退出遗留的文件会在后续打开动图时清理。未主动保存时不会写入相册。
 
-## Permissions, sharing, storage, and control
+## 权限与共享
 
-The app declares only Internet access. Picker, image save, and sharing actions use
-HarmonyOS system components and temporary per-action grants. It declares no broad
-gallery, location, contacts, camera, microphone, or notification permission.
+应用仅声明网络访问权限。选择图片、保存图片和分享使用鸿蒙系统组件按次授权，不申请广泛相册、定位、通讯录、相机、麦克风或通知权限。
 
-The app has no advertising, analytics, push, or account SDK. Other than necessary
-communication with 4D4Y to provide the requested forum feature, it does not share
-personal data with third parties. Local settings, search history, and reading history stay
-until changed, cleared, or the app is uninstalled. Saved account sessions stay until that account is
-removed, app data is cleared, or the app is uninstalled. Forum-server retention is
-controlled by the 4D4Y operator.
+本版本没有第三方广告、统计、推送或账号 SDK。除提供论坛功能所必需的通信外，不向广告、统计或画像服务共享个人信息。
 
-Users may manage local settings in Settings, clear reading history in Reading History,
-clear search history in Search, and remove locally saved accounts in Account Management. Questions and requests about
-this app can be sent to sis5595@hotmail.com. Requests about 4D4Y account or server-side
-content should be made through the forum operator.
+## 存储与保留
 
-The app does not knowingly target children or collect age information. A material policy
-change will be versioned and require renewed in-app consent before forum functionality
-is made available.
+上述本地数据保存在你的设备上。已保存账号会话由系统安全存储保护，其余偏好不包含密码或原始会话 Cookie。
+
+- 阅读历史和搜索历史保留至你在对应页面清空、清除应用数据或卸载应用。
+- 显示偏好保留至你更改、清除应用数据或卸载应用。
+- 已保存账号会话保留至你在账号管理中移除该账号、清除应用数据或卸载应用。
+- 收藏和关注缓存随已确认操作更新，保留至缓存替换、清除应用数据或卸载应用；账号切换不会混用缓存。
+
+论坛服务器上的数据及其保留期限由 4D4Y 运营方决定。
+
+## 你的控制方式
+
+你可以在设置中调整偏好，在浏览记录和搜索页面清空对应历史，在账号管理中移除已保存账号及本机会话。
+
+也可以在应用内隐私政策页撤回同意。撤回后应用停止进入论坛功能；如需删除已保存会话，应先在账号管理中移除账号。
+
+论坛服务器上的帖子、私信、收藏、关注或账号数据，请使用论坛功能或联系论坛运营方处理。关于本应用的隐私问题，可联系 sis5595@hotmail.com。
+
+## 未成年人及政策更新
+
+应用不为未成年人提供专门服务，也不会主动识别或收集年龄信息。未成年人请在监护人同意和指导下使用本应用及论坛。
+
+数据处理方式发生实质变化时，会更新政策日期和版本，并在应用内重新征得同意。

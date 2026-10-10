@@ -34,6 +34,8 @@ export interface FourD4yPrivateConversationPayload {
   conversationLayoutFound: boolean;
   errorMessage: string;
   messages: FourD4yPrivateConversationMessage[];
+  /** A verified clear control in the conversation header, never message HTML. */
+  clearAvailable?: boolean;
 }
 
 /**

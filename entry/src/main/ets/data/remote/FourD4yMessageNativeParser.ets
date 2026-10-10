@@ -1,4 +1,5 @@
 import { FourD4yPageAccessState } from '../../domain/reader/FourD4yReaderContracts';
+import { extractFourD4yViewerUserId } from './FourD4yViewerIdentityParser';
 import { FourD4yMessageItem, FourD4yMessageKind, FourD4yMessageMode, FourD4yMessagePagePayload,
   FourD4yMessagePromptPayload, isAllowedFourD4yMessagePageUrl,
   readFourD4yMessageMode } from '../../domain/notice/FourD4yMessageContracts';
@@ -24,7 +25,7 @@ export function parseFourD4yNativeMessagePage(html: string, requestUrl: string,
     mode: mode,
     page: page,
     lastPage: parseLastPage(html, page),
-    viewerUserId: extractViewerUserId(html),
+    viewerUserId: extractFourD4yViewerUserId(html),
     accessState: accessState,
     hasChallenge: /challenge-platform|cf-chl-|cf-turnstile/i.test(html),
     resultLayoutFound: hasMessageLayout(html, mode),
@@ -39,7 +40,13 @@ export function parseFourD4yNativeMessagePrompt(html: string,
   if (html.length === 0 || loadSequence < 1) {
     return null;
   }
-  const promptFound: boolean = /\bid=["']myprompt["']/i.test(html);
+  const markup: string = html.replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(?:script|style)\b[^>]*>[\s\S]*?<\/(?:script|style)>/gi, '');
+  const promptFound: boolean = /<[a-z][^>]*\sid\s*=\s*["']myprompt["'][^>]*>/i.test(markup);
+  // Cloudflare JSD is also injected into ordinary authenticated pages. A
+  // challenge-platform script alone cannot invalidate their prompt counters.
+  const challengeControl: boolean = /<[a-z][^>]*\s(?:id\s*=\s*["'](?:challenge-form|cf-challenge-running)["']|class\s*=\s*["'](?:[^"']*\s)?cf-turnstile(?:\s[^"']*)?["'])/i.test(markup) ||
+    /<title\b[^>]*>\s*(?:Just a moment|Attention Required)/i.test(markup);
   const accessState: FourD4yPageAccessState = !promptFound && isLoginPage(html) ?
     FourD4yPageAccessState.LoginRequired : FourD4yPageAccessState.Available;
   return {
@@ -55,16 +62,36 @@ export function parseFourD4yNativeMessagePrompt(html: string,
     // capture its first explicit count rather than guessing text content.
     friendNoticeCount: readPromptCount(html, 'prompt_friend', '\\((\\d+)\\)'),
     accessState: accessState,
-    hasChallenge: /challenge-platform|cf-chl-|cf-turnstile/i.test(html),
+    hasChallenge: challengeControl || (!promptFound && /challenge-platform|cf-chl-|cf-turnstile/i.test(html)),
     promptFound: promptFound
   };
+}
+
+/** NG reads the unread-only list, not the sometimes stale index prompt_pm counter. */
+export function parseFourD4yUnreadPrivateMessageCount(html: string): number | null {
+  const markup: string = html.replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(?:script|style)\b[^>]*>[\s\S]*?<\/(?:script|style)>/gi, '');
+  const header: RegExpMatchArray | null = markup.match(
+    /<div\b[^>]*\sclass=["'][^"']*\bpm_header\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+  if (header === null || !/<li\b[^>]*\sclass=["']current["'][^>]*>\s*<a\b[^>]*\shref=["'](?:https:\/\/www\.4d4y\.com\/forum\/)?pm\.php\?filter=newpm["']/i.test(header[1]) ||
+    extractFourD4yViewerUserId(markup).length === 0) return null;
+  const list: RegExpMatchArray | null = markup.match(
+    /<ul\b[^>]*\sclass=["']pm_list["'][^>]*>([\s\S]*?)<\/ul>/i);
+  if (list !== null) {
+    const rows: RegExpMatchArray | null = list[1].match(/<li\b[^>]*\sid=["']pm_\d+["']/gi);
+    const items: FourD4yMessageItem[] = parsePrivateMessages(list[0]);
+    if (rows === null || rows.length !== items.length || items.some((item: FourD4yMessageItem): boolean =>
+      !item.isUnread)) return null;
+    return items.length;
+  }
+  return /<p\b[^>]*\sclass=["']nodata["'][^>]*>\s*(?:暂无|没有|不存在)[^<]{0,80}<\/p>/i.test(markup) ? 0 : null;
 }
 
 function parsePrivateMessages(html: string): FourD4yMessageItem[] {
   const items: FourD4yMessageItem[] = [];
   const seenIds: Set<string> = new Set<string>();
-  // NG's active parser and MY 4D4Y's message-detail parser both retain this
-  // current forum layout. It has no pm.php?action=view link per row: pmid is
+  // NG's active parser and observed 4D4Y pages use this list layout.
+  // It has no pm.php?action=view link per row: pmid is
   // carried by li#pm_<id>, while sender/time live in p.cite.
   const mobileListPattern: RegExp = /<ul\b[^>]*\bclass=["'][^"']*\bpm_list\b[^"']*["'][^>]*>[\s\S]*?<\/ul>/gi;
   let mobileListMatch: RegExpExecArray | null = mobileListPattern.exec(html);
@@ -121,7 +148,7 @@ function parsePrivateMessageRow(rowHtml: string, knownId: string = ''): FourD4yM
     occurredAt: extractTime(rowHtml),
     threadId: '',
     postId: '',
-    isUnread: isUnread(rowHtml)
+    isUnread: isPrivateRowUnread(rowHtml)
   };
 }
 
@@ -325,6 +352,14 @@ function extractSummary(value: string): string {
 }
 
 function extractTime(value: string): string {
+  // NG reads p.cite own text: relative dates such as today/yesterday do not
+  // match the absolute-date fallback. Sender and status children are not time.
+  const cite: RegExpMatchArray | null = value.match(
+    /<p\b[^>]*\bclass=["'][^"']*\bcite\b[^"']*["'][^>]*>([\s\S]*?)<\/p>/i);
+  if (cite !== null) {
+    return toPlainText(cite[1].replace(/<cite\b[^>]*>[\s\S]*?<\/cite>/gi, ' ')
+      .replace(/<img\b[^>]*>/gi, ' ')).slice(0, 80);
+  }
   const candidates: RegExp[] = [
     /<td\b[^>]*\bclass=["'][^"']*\btime\b[^"']*["'][^>]*>([\s\S]*?)<\/td>/i,
     /<span\b[^>]*\bclass=["'][^"']*\bxg1\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i,
@@ -379,6 +414,16 @@ function isUnread(value: string): boolean {
   return /(?:notice_)?newpm\.gif|\bclass=["'][^"']*\bnew\b[^"']*["']|font-weight\s*:\s*bold/i.test(value);
 }
 
+function isPrivateRowUnread(value: string): boolean {
+  const cite: RegExpMatchArray | null = value.match(
+    /<p\b[^>]*\bclass=["'][^"']*\bcite\b[^"']*["'][^>]*>([\s\S]*?)<\/p>/i);
+  if (cite === null) {
+    // Keep the separate, previously tested legacy table/dl contract.
+    return isUnread(value);
+  }
+  return /<img\b[^>]*\ssrc=["'](?:[^"']*\/)?(?:notice_)?newpm\.gif(?:[?#][^"']*)?["']/i.test(cite[1]);
+}
+
 function hasMessageLayout(html: string, mode: FourD4yMessageMode): boolean {
   if (mode === FourD4yMessageMode.PrivateMessages) {
     return /<table\b[^>]*>|\bclass=["'][^"']*\bpm_list\b[^"']*["']|\bid=["']pmlist_\d+["']/i.test(html) ||
@@ -417,8 +462,15 @@ function parseLastPage(html: string, currentPage: number): number {
 }
 
 function readPromptCount(html: string, id: string, label: string): number {
-  const pattern: RegExp = new RegExp('\\bid=["\']' + id + '["\'][^>]*>[\\s\\S]*?' + label, 'i');
-  const match: RegExpMatchArray | null = html.match(pattern);
+  // Match one complete server counter anchor, as NG selects a#prompt_*. A
+  // missing number must not spill into the next anchor or the page body.
+  const pattern: RegExp = new RegExp('<a\\b[^>]*\\sid\\s*=\\s*["\']' + id +
+    '["\'][^>]*>([\\s\\S]*?)</a>', 'i');
+  const anchor: RegExpMatchArray | null = html.replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '').match(pattern);
+  const match: RegExpMatchArray | null = anchor === null ? null :
+    toPlainText(anchor[1]).replace(/\(\s+/g, '(').replace(/\s+\)/g, ')')
+      .match(new RegExp(label, 'i'));
   if (match === null) {
     return 0;
   }
@@ -429,22 +481,6 @@ function readPromptCount(html: string, id: string, label: string): number {
 function readPageFromUrl(url: string): number {
   const match: RegExpMatchArray | null = url.match(/[?&]page=(\d+)(?:&|$)/i);
   return match === null ? 1 : Math.max(1, Number.parseInt(match[1], 10));
-}
-
-function extractViewerUserId(html: string): string {
-  const patterns: RegExp[] = [
-    /discuz_uid\s*=\s*["']?(\d+)["']?/i,
-    /\buid\s*=\s*(\d+)/i,
-    /space\.php\?uid=(\d+)/i,
-    /home\.php\?mod=space&(?:amp;)?uid=(\d+)/i
-  ];
-  for (let index: number = 0; index < patterns.length; index += 1) {
-    const match: RegExpMatchArray | null = html.match(patterns[index]);
-    if (match !== null) {
-      return match[1];
-    }
-  }
-  return '';
 }
 
 function isLoginPage(html: string): boolean {

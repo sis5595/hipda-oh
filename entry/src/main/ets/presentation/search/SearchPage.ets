@@ -1,5 +1,5 @@
 import { webview } from '@kit.ArkWeb';
-import { preferences } from '@kit.ArkData';
+import { FourD4ySearchHistoryStore } from '../../data/local/FourD4ySearchHistoryStore';
 import { FourD4yNativeSearchResult, FourD4ySearchNativeClient } from '../../data/remote/FourD4ySearchNativeClient';
 import { FourD4ySearchPostNativeResolver, FourD4ySearchPostResolveResult } from
   '../../data/remote/FourD4ySearchPostNativeResolver';
@@ -7,8 +7,7 @@ import { FourD4ySession } from '../../data/remote/FourD4ySession';
 import { FourD4yPageAccessState } from '../../domain/reader/FourD4yReaderContracts';
 import { FOUR_D4Y_FORUM_GROUPS, FourD4yForumGroup, getFourD4yForums } from '../../domain/catalog/FourD4yForumCatalog';
 import { ForumSummary } from '../../domain/model/ForumModels';
-import { addFourD4ySearchHistoryEntry, FourD4ySearchHistoryEntry,
-  parseFourD4ySearchHistory } from '../../domain/search/FourD4ySearchHistory';
+import { FourD4ySearchHistoryEntry } from '../../domain/search/FourD4ySearchHistory';
 import { FourD4ySearchFormPayload, FourD4ySearchMode, FourD4ySearchPagePayload,
   FourD4ySearchPostTargetPayload, FourD4ySearchReaderOutcome, FourD4ySearchThread,
   getFourD4ySearchReaderOutcome, isMeaningfulFourD4yFullTextResult,
@@ -53,7 +52,7 @@ export struct SearchPage {
   private readonly forums: ForumSummary[] = getFourD4yForums();
   private readonly forumGroups: FourD4yForumGroup[] = FOUR_D4Y_FORUM_GROUPS;
   private searchForm: FourD4ySearchFormPayload | null = null;
-  private historyPreferences: preferences.Preferences | null = null;
+  private historyOperationSequence: number = 0;
   private activeSearchMode: FourD4ySearchMode = FourD4ySearchMode.Title;
   private activeSearchKeyword: string = '';
   private formProbeSequence: number = 0;
@@ -72,13 +71,19 @@ export struct SearchPage {
   @State profileSearchName: string = '';
   private pendingProfileSearch: boolean = false;
   private skipNextHistoryEntry: boolean = false;
+  private isSearchAlive: boolean = false;
 
   aboutToAppear(): void {
+    this.isSearchAlive = true;
     this.loadHistory();
     this.loadSearchForm();
   }
 
   aboutToDisappear(): void {
+    this.isSearchAlive = false;
+    this.formProbeSequence += 1;
+    this.resultLoadSequence += 1;
+    this.postResolveSequence += 1;
     this.clearResultLoadWatchdog();
     this.clearFormProbeWatchdog();
     this.clearPostResolveWatchdog();
@@ -531,6 +536,9 @@ export struct SearchPage {
   }
 
   private loadSearchForm(): void {
+    if (!this.isSearchAlive) {
+      return;
+    }
     this.formProbeSequence += 1;
     const probeSequence: number = this.formProbeSequence;
     this.searchForm = null;
@@ -596,6 +604,9 @@ export struct SearchPage {
   }
 
   private async beginSearch(): Promise<void> {
+    if (!this.isSearchAlive) {
+      return;
+    }
     const normalizedKeyword: string = this.keyword.trim();
     if (this.isLoading) {
       return;
@@ -661,7 +672,7 @@ export struct SearchPage {
   }
 
   private loadSearchPage(url: string): void {
-    if (this.isLoading || !isAllowedFourD4ySearchPageUrl(url)) {
+    if (!this.isSearchAlive || this.isLoading || !isAllowedFourD4ySearchPageUrl(url)) {
       return;
     }
     const loadSequence: number = this.resultLoadSequence + 1;
@@ -755,42 +766,56 @@ export struct SearchPage {
   }
 
   private async loadHistory(): Promise<void> {
+    const sequence: number = this.historyOperationSequence;
     try {
       const hostContext = this.getUIContext().getHostContext();
       if (hostContext === undefined) {
-        this.history = [];
         return;
       }
-      const store: preferences.Preferences = await preferences.getPreferences(hostContext,
-        'four_d4y_search_history');
-      this.historyPreferences = store;
-      const rawHistory: string = store.getSync('entries', '') as string;
-      this.history = parseFourD4ySearchHistory(rawHistory);
+      const entries: FourD4ySearchHistoryEntry[] = await FourD4ySearchHistoryStore.load(hostContext);
+      if (!this.isSearchAlive || sequence !== this.historyOperationSequence) {
+        return;
+      }
+      this.history = entries;
     } catch (_error) {
       // Search remains available if local history cannot be opened.
-      this.history = [];
     }
   }
 
   private addHistory(entry: FourD4ySearchHistoryEntry): void {
-    this.history = addFourD4ySearchHistoryEntry(this.history, entry);
-    this.persistHistory();
+    void this.persistHistory(entry);
   }
 
   private clearHistory(): void {
-    this.history = [];
-    this.persistHistory();
+    void this.persistHistory();
   }
 
-  private async persistHistory(): Promise<void> {
-    if (this.historyPreferences === null) {
+  private async persistHistory(entry?: FourD4ySearchHistoryEntry): Promise<void> {
+    if (!this.isSearchAlive) {
       return;
     }
+    const sequence: number = ++this.historyOperationSequence;
     try {
-      await this.historyPreferences.put('entries', JSON.stringify(this.history));
-      await this.historyPreferences.flush();
+      const hostContext = this.getUIContext().getHostContext();
+      if (hostContext === undefined) {
+        throw new Error('search-history-context-unavailable');
+      }
+      const entries: FourD4ySearchHistoryEntry[] = entry === undefined ?
+        await FourD4ySearchHistoryStore.clear(hostContext) : await FourD4ySearchHistoryStore.record(hostContext, entry);
+      if (this.isSearchAlive && sequence === this.historyOperationSequence) {
+        this.history = entries;
+      }
     } catch (_error) {
       // A storage failure must never block a read-only server search.
+      if (this.isSearchAlive && sequence === this.historyOperationSequence) {
+        try {
+          this.getUIContext().getPromptAction().showToast({
+            message: entry === undefined ? '清空搜索历史失败，请重试。' : '本次搜索历史未保存；不影响搜索结果。'
+          });
+        } catch (_toastError) {
+          // Feedback failure must not turn history persistence into an unhandled rejection.
+        }
+      }
     }
   }
 

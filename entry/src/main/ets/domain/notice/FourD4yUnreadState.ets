@@ -17,6 +17,19 @@ export class FourD4yUnreadState {
   private readonly listeners: Map<number, FourD4yUnreadStateListener> =
     new Map<number, FourD4yUnreadStateListener>();
   private nextListenerId: number = 1;
+  private refreshSequence: number = 0;
+
+  /** Home and message center share one projection, so local page tokens alone
+   * cannot reject an older response from the other still-mounted page.
+   */
+  beginRefresh(): number {
+    this.refreshSequence += 1;
+    return this.refreshSequence;
+  }
+
+  isCurrentRefresh(sequence: number): boolean {
+    return sequence > 0 && sequence === this.refreshSequence;
+  }
 
   hasSnapshot(): boolean {
     return this.hasServerSnapshot;
@@ -64,6 +77,7 @@ export class FourD4yUnreadState {
 
   /** An account transition or rejected session invalidates every old count. */
   clear(): void {
+    this.refreshSequence += 1;
     if (!this.hasServerSnapshot && this.privateMessageCount === 0 && this.threadNoticeCount === 0 &&
       this.systemNoticeCount === 0 && this.friendNoticeCount === 0) {
       return;

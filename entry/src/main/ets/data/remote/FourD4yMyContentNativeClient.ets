@@ -4,6 +4,7 @@ import { FourD4yMyContentPagePayload, isAllowedFourD4yMyContentUrl } from
   '../../domain/mine/FourD4yMyContentContracts';
 import { appendFourD4ySessionId } from './FourD4yRequestCookieBridge';
 import { FourD4ySession } from './FourD4ySession';
+import { FourD4yNativeRedirectBoundary } from './FourD4yNativeRedirectBoundary';
 import { parseFourD4yNativeMyContentPage } from './FourD4yMyContentNativeParser';
 
 export type FourD4yNativeMyContentStatus = 'success' | 'cookie-missing' | 'server-login-required' |
@@ -48,6 +49,8 @@ export class FourD4yMyContentNativeClient {
     const requestUrl: string = appendFourD4ySessionId(url, cookieHeader);
     const request: http.HttpRequest = http.createHttp();
     try {
+      const boundary: FourD4yNativeRedirectBoundary = new FourD4yNativeRedirectBoundary(requestUrl);
+      boundary.attach(request);
       const response: http.HttpResponse = await request.request(requestUrl, {
         method: http.RequestMethod.GET,
         expectDataType: http.HttpDataType.ARRAY_BUFFER,
@@ -65,11 +68,15 @@ export class FourD4yMyContentNativeClient {
           'Referer': FourD4ySession.forumRoot
         }
       });
-      if (response.responseCode !== http.ResponseCode.OK || !(response.result instanceof ArrayBuffer)) {
+      if (!boundary.isResponseAllowed() || response.responseCode !== http.ResponseCode.OK ||
+        !(response.result instanceof ArrayBuffer)) {
         return this.attempt('request-failed', null, 0);
       }
       const acceptedCookieCount: number = await FourD4ySession.acceptNativeResponseCookies(
-        requestUrl, response.header);
+        requestUrl, response.header, cookieHeader);
+      if (acceptedCookieCount < 0) {
+        return this.attempt('request-failed', null, 0);
+      }
       const html: string = this.decoder.decodeToString(new Uint8Array(response.result));
       const payload: FourD4yMyContentPagePayload | null = parseFourD4yNativeMyContentPage(
         html, url, loadSequence);

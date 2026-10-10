@@ -1,4 +1,5 @@
 import { FourD4yPageAccessState } from '../../domain/reader/FourD4yReaderContracts';
+import { extractFourD4yViewerUserId } from './FourD4yViewerIdentityParser';
 import { FourD4yMyContentItem, FourD4yMyContentMode, FourD4yMyContentPagePayload,
   isAllowedFourD4yMyContentUrl, readFourD4yMyContentMode } from '../../domain/mine/FourD4yMyContentContracts';
 
@@ -27,7 +28,7 @@ export function parseFourD4yNativeMyContentPage(html: string, requestUrl: string
     mode: mode,
     page: page,
     lastPage: parseLastPage(html, page),
-    viewerUserId: extractViewerUserId(html),
+    viewerUserId: extractFourD4yViewerUserId(html),
     accessState: accessState,
     hasChallenge: /challenge-platform|cf-chl-|cf-turnstile/i.test(html),
     resultLayoutFound: tableMatch !== null || hasEmptyListMessage(html),
@@ -206,21 +207,6 @@ function readPageFromUrl(url: string): number {
   }
   const page: number = Number.parseInt(match[1], 10);
   return Number.isFinite(page) && page > 0 ? page : 1;
-}
-
-function extractViewerUserId(html: string): string {
-  const patterns: RegExp[] = [
-    /discuz_uid\s*=\s*["']?(\d+)["']?/i,
-    /\buid\s*=\s*(\d+)/i,
-    /space\.php\?uid=(\d+)/i
-  ];
-  for (let index: number = 0; index < patterns.length; index += 1) {
-    const match: RegExpMatchArray | null = html.match(patterns[index]);
-    if (match !== null) {
-      return match[1];
-    }
-  }
-  return '';
 }
 
 function isLoginPage(html: string): boolean {

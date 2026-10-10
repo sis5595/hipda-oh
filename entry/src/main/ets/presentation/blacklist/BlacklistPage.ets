@@ -13,6 +13,7 @@ import { FourD4yBlacklistEntry, FourD4yBlacklistMutationKind, FourD4yBlacklistMu
   '../../domain/blacklist/FourD4yBlacklistContracts';
 import { BlacklistRouteParams } from './BlacklistRouteState';
 import { FourD4yBlacklistState } from '../../domain/blacklist/FourD4yBlacklistState';
+import { FourD4yAccountState } from '../../domain/account/FourD4yAccountState';
 
 /**
  * Native manager for the forum's own PM blacklist. Membership is read from,
@@ -25,6 +26,7 @@ export struct BlacklistPage {
   @Consume('pathStack') pathStack: NavPathStack;
   @Consume('authState') isLoggedIn: boolean;
   @Consume('blacklistState') blacklistState: FourD4yBlacklistState;
+  @Consume('accountState') accountState: FourD4yAccountState;
   @State entries: FourD4yBlacklistEntry[] = [];
   @State draftUserName: string = '';
   @State isLoading: boolean = false;
@@ -51,9 +53,19 @@ export struct BlacklistPage {
   private verificationTimeoutId: number = -1;
   private readonly timeoutMillis: number = 30000;
   private promptForSuggestedUser: boolean = false;
+  private isPageAlive: boolean = false;
+  private beginLoadSequence: number = 0;
+  private requestSessionGeneration: number = 0;
+
+  aboutToAppear(): void {
+    this.isPageAlive = true;
+  }
 
   aboutToDisappear(): void {
+    this.isPageAlive = false;
+    this.beginLoadSequence += 1;
     this.loadSequence += 1;
+    this.operationSequence += 1;
     this.clearLoadWatchdog();
     this.clearMutationWatchdog();
   }
@@ -313,7 +325,17 @@ export struct BlacklistPage {
   }
 
   private async beginLoad(): Promise<void> {
-    this.isLoggedIn = await FourD4ySession.isLoggedIn();
+    if (!this.isPageAlive || this.isLoading || this.isMutating) {
+      return;
+    }
+    const sequence: number = ++this.beginLoadSequence;
+    const sessionGeneration: number = this.accountState.getSessionGeneration();
+    const loggedIn: boolean = await FourD4ySession.isLoggedIn();
+    if (!this.isPageAlive || sequence !== this.beginLoadSequence ||
+      sessionGeneration !== this.accountState.getSessionGeneration()) {
+      return;
+    }
+    this.isLoggedIn = loggedIn;
     if (!this.isLoggedIn) {
       this.entries = [];
       this.blacklistState.clearServerSnapshot();
@@ -325,12 +347,16 @@ export struct BlacklistPage {
   }
 
   private loadBlacklist(allowDuringMutation: boolean): void {
-    if (this.isLoading || (this.isMutating && !allowDuringMutation)) {
+    if (!this.isPageAlive || this.isLoading || (this.isMutating && !allowDuringMutation) ||
+      (this.isMutating && !this.isCurrentSession())) {
       return;
     }
     const expectedSequence: number = this.loadSequence + 1;
     const requestUrl: string | null = buildFourD4yBlacklistUrl(expectedSequence);
     this.loadSequence = expectedSequence;
+    this.requestSessionGeneration = this.accountState.getSessionGeneration();
+    this.hasMutationToken = false;
+    this.hasRemovalControl = false;
     this.terminalLoadSequence = 0;
     this.blacklistUrl = requestUrl === null ? '' : requestUrl;
     this.isLoading = true;
@@ -353,10 +379,13 @@ export struct BlacklistPage {
   }
 
   private onWebControllerAttached(): void {
+    if (!this.isPageAlive) {
+      return;
+    }
     this.isWebControllerAttached = true;
     try {
       this.webController.setCustomUserAgent(FourD4ySession.fullSiteUserAgent);
-      if (this.blacklistUrl.length > 0 && this.isLoading) {
+      if (this.isCurrentSession() && this.blacklistUrl.length > 0 && this.isLoading) {
         this.webController.loadUrl(this.blacklistUrl);
       }
     } catch (_error) {
@@ -448,11 +477,14 @@ export struct BlacklistPage {
         '该用户已在服务器黑名单中。' : this.statusMessage;
       return;
     }
+    const loadSequence: number = this.loadSequence;
+    const operationSequence: number = this.operationSequence;
+    const sessionGeneration: number = this.accountState.getSessionGeneration();
     this.getUIContext().getPromptAction().showDialog({
       message: '将“' + userName + '”加入 4D4Y 服务器黑名单？',
       buttons: [{ text: '取消', color: $r('app.color.text_body') }, { text: '加入黑名单', color: $r('app.color.danger_text') }]
     }).then((result) => {
-      if (result.index === 1) {
+      if (result.index === 1 && this.isCurrentConfirmation(loadSequence, operationSequence, sessionGeneration)) {
         this.startMutation(FourD4yBlacklistMutationKind.Add, userName);
       }
     }).catch(() => {});
@@ -463,19 +495,31 @@ export struct BlacklistPage {
       entry.userName === userName)) {
       return;
     }
+    const loadSequence: number = this.loadSequence;
+    const operationSequence: number = this.operationSequence;
+    const sessionGeneration: number = this.accountState.getSessionGeneration();
     this.getUIContext().getPromptAction().showDialog({
       message: '将“' + userName + '”从 4D4Y 服务器黑名单移除？',
       buttons: [{ text: '取消', color: $r('app.color.text_body') }, { text: '移除', color: $r('app.color.danger_text') }]
     }).then((result) => {
-      if (result.index === 1) {
+      if (result.index === 1 && this.isCurrentConfirmation(loadSequence, operationSequence, sessionGeneration)) {
         this.startMutation(FourD4yBlacklistMutationKind.Remove, userName);
       }
     }).catch(() => {});
   }
 
   private canStartMutation(userName: string): boolean {
-    return !this.isLoading && !this.isMutating && this.isLoggedIn && this.hasMutationToken &&
+    return this.isCurrentSession() && !this.isLoading && !this.isMutating && this.isLoggedIn && this.hasMutationToken &&
       isValidFourD4yBlacklistUserName(userName);
+  }
+
+  private isCurrentSession(): boolean {
+    return this.isPageAlive && this.requestSessionGeneration === this.accountState.getSessionGeneration();
+  }
+
+  private isCurrentConfirmation(loadSequence: number, operationSequence: number, sessionGeneration: number): boolean {
+    return this.isCurrentSession() && loadSequence === this.loadSequence &&
+      operationSequence === this.operationSequence && sessionGeneration === this.requestSessionGeneration;
   }
 
   private async startMutation(kind: FourD4yBlacklistMutationKind, userName: string): Promise<void> {
@@ -500,7 +544,7 @@ export struct BlacklistPage {
       const rawResult: string = await this.webController.runJavaScript(
         this.getMutationStartScript(kind, userName, operationSequence)
       );
-      if (operationSequence !== this.operationSequence || !this.isMutating) {
+      if (!this.isCurrentSession() || operationSequence !== this.operationSequence || !this.isMutating) {
         return;
       }
       const payload: FourD4yBlacklistMutationStartPayload | null =
@@ -525,21 +569,21 @@ export struct BlacklistPage {
     } catch (_error) {
       // Native form navigation can interrupt the promise. The refreshed list
       // remains the sole success criterion.
-      if (operationSequence === this.operationSequence && this.isMutating) {
+      if (this.isCurrentSession() && operationSequence === this.operationSequence && this.isMutating) {
         this.statusMessage = '正在等待服务器确认黑名单操作…';
       }
     }
   }
 
   private scheduleVerification(operationSequence: number, delayMillis: number): void {
-    if (!this.isMutating || operationSequence !== this.operationSequence) {
+    if (!this.isCurrentSession() || !this.isMutating || operationSequence !== this.operationSequence) {
       return;
     }
     if (this.verificationTimeoutId >= 0) {
       clearTimeout(this.verificationTimeoutId);
     }
     this.verificationTimeoutId = setTimeout(() => {
-      if (!this.isMutating || operationSequence !== this.operationSequence) {
+      if (!this.isCurrentSession() || !this.isMutating || operationSequence !== this.operationSequence) {
         return;
       }
       this.verificationAttempt += 1;
@@ -549,7 +593,7 @@ export struct BlacklistPage {
   }
 
   private isCurrentMutationResponse(url: string): boolean {
-    if (!this.isMutating || typeof url !== 'string' ||
+    if (!this.isCurrentSession() || !this.isMutating || typeof url !== 'string' ||
       url.indexOf('https://www.4d4y.com/forum/pm.php?') !== 0) {
       return false;
     }
@@ -559,7 +603,7 @@ export struct BlacklistPage {
 
   private async readMutationResultFromWeb(): Promise<void> {
     const expectedOperationSequence: number = this.operationSequence;
-    if (!this.isMutating || this.mutationResponseSequence === expectedOperationSequence) {
+    if (!this.isCurrentSession() || !this.isMutating || this.mutationResponseSequence === expectedOperationSequence) {
       return;
     }
     this.mutationResponseSequence = expectedOperationSequence;
@@ -567,7 +611,7 @@ export struct BlacklistPage {
       const rawResult: string = await this.webController.runJavaScript(
         this.getMutationResultScript(expectedOperationSequence)
       );
-      if (!this.isMutating || expectedOperationSequence !== this.operationSequence) {
+      if (!this.isCurrentSession() || !this.isMutating || expectedOperationSequence !== this.operationSequence) {
         return;
       }
       const payload: FourD4yBlacklistMutationResultPayload | null =
@@ -597,7 +641,9 @@ export struct BlacklistPage {
       this.scheduleVerification(expectedOperationSequence, 600);
     } catch (_error) {
       // The fallback read scheduled at mutation start remains available.
-      this.mutationResponseSequence = -1;
+      if (this.isCurrentSession() && expectedOperationSequence === this.operationSequence) {
+        this.mutationResponseSequence = -1;
+      }
     }
   }
 
@@ -612,7 +658,7 @@ export struct BlacklistPage {
   }
 
   private completeMutation(operationSequence: number): void {
-    if (operationSequence !== this.operationSequence) {
+    if (!this.isCurrentSession() || operationSequence !== this.operationSequence) {
       return;
     }
     const userName: string = this.mutatingUserName;
@@ -631,7 +677,7 @@ export struct BlacklistPage {
   }
 
   private failMutation(operationSequence: number, message: string): void {
-    if (operationSequence !== this.operationSequence) {
+    if (!this.isCurrentSession() || operationSequence !== this.operationSequence) {
       return;
     }
     this.clearMutationWatchdog();
@@ -643,7 +689,7 @@ export struct BlacklistPage {
   }
 
   private showSecurityVerification(operationSequence: number): void {
-    if (operationSequence !== this.operationSequence) {
+    if (!this.isCurrentSession() || operationSequence !== this.operationSequence) {
       return;
     }
     this.clearMutationWatchdog();
@@ -661,11 +707,11 @@ export struct BlacklistPage {
   }
 
   private isCurrentBlacklistRequest(url: string): boolean {
-    return isCurrentFourD4yBlacklistRequest(url, this.loadSequence);
+    return this.isCurrentSession() && isCurrentFourD4yBlacklistRequest(url, this.loadSequence);
   }
 
   private isLoadTerminal(sequence: number = this.loadSequence): boolean {
-    return sequence === this.terminalLoadSequence;
+    return !this.isCurrentSession() || sequence === this.terminalLoadSequence;
   }
 
   private startLoadWatchdog(sequence: number): void {
@@ -701,7 +747,7 @@ export struct BlacklistPage {
   }
 
   private finishLoad(sequence: number): void {
-    if (sequence !== this.loadSequence) {
+    if (!this.isCurrentSession() || sequence !== this.loadSequence) {
       return;
     }
     this.clearLoadWatchdog();
@@ -710,7 +756,7 @@ export struct BlacklistPage {
   }
 
   private failLoad(sequence: number, message: string): void {
-    if (sequence !== this.loadSequence) {
+    if (!this.isCurrentSession() || sequence !== this.loadSequence) {
       return;
     }
     this.finishLoad(sequence);

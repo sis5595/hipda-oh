@@ -1,5 +1,6 @@
+import { FourD4yCollectionCache } from './FourD4yCollectionCache';
 /**
- * Session-only, value-free mirror of server-confirmed favorite thread IDs.
+ * Account-bound, value-free mirror of server-confirmed favorite thread IDs.
  *
  * The forum always renders an add link in a topic, even when it is already
  * favorited. Keeping this small mirror lets a newly opened detail page retain
@@ -7,7 +8,8 @@
  * formhash values, and page HTML are deliberately never stored here.
  */
 export class FourD4yFavoriteState {
-  private readonly favoriteThreadIds: Set<string> = new Set<string>();
+  readonly cache: FourD4yCollectionCache = new FourD4yCollectionCache();
+  private readonly favoriteThreadIds: FourD4yCollectionCache = this.cache;
   private readonly mutationListeners: Map<number, FourD4yFavoriteMutationListener> =
     new Map<number, FourD4yFavoriteMutationListener>();
   private nextMutationListenerId: number = 1;
@@ -28,10 +30,9 @@ export class FourD4yFavoriteState {
     }
   }
 
-  observeServerFavorites(threadIds: string[]): void {
-    threadIds.forEach((threadId: string) => {
-      this.markFavorite(threadId);
-    });
+  observeServerFavorites(threadIds: string[], page: number = 0, lastPage: number = 0,
+    source?: Object): void {
+    this.favoriteThreadIds.observePage(threadIds, page, lastPage, source);
   }
 
   clear(): void {

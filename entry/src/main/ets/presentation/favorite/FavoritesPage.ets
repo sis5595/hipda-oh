@@ -1,4 +1,6 @@
 import { webview } from '@kit.ArkWeb';
+import { common } from '@kit.AbilityKit';
+import { bindFourD4yCollectionCache } from '../common/FourD4yCollectionCacheBinding';
 import { FourD4ySession } from '../../data/remote/FourD4ySession';
 import { FourD4yFavoriteMutationStartPayload, FourD4yFavoritePagePayload, FourD4yFavoriteReaderOutcome,
   FourD4yFavoriteThread, getFourD4yFavoriteReaderOutcome,
@@ -7,6 +9,9 @@ import { FourD4yFavoriteMutationStartPayload, FourD4yFavoritePagePayload, FourD4
 import { FourD4yPageAccessState } from '../../domain/reader/FourD4yReaderContracts';
 import { createThreadRouteParams } from '../thread/ThreadRouteState';
 import { FourD4yFavoriteState } from '../../domain/favorite/FourD4yFavoriteState';
+import { FourD4yCollectionSnapshotSource } from '../../domain/favorite/FourD4yCollectionCache';
+import { FourD4yAccountState } from '../../domain/account/FourD4yAccountState';
+import { buildFourD4yCollectionPaginationScript } from '../../domain/favorite/FourD4yCollectionPagination';
 
 /**
  * Server-owned 4D4Y favorites. The page keeps the forum's CSRF token entirely
@@ -17,6 +22,7 @@ export struct FavoritesPage {
   @Consume('pathStack') pathStack: NavPathStack;
   @Consume('authState') isLoggedIn: boolean;
   @Consume('favoriteState') favoriteState: FourD4yFavoriteState;
+  @Consume('accountState') accountState: FourD4yAccountState;
   @State favorites: FourD4yFavoriteThread[] = [];
   @State currentPage: number = 1;
   @State lastPage: number = 1;
@@ -33,19 +39,29 @@ export struct FavoritesPage {
   private loadTimeoutId: number = -1;
   private removeOperationSequence: number = 0;
   private removingThreadId: string = '';
+  private removalVerificationPage: number = 1;
   private favoriteRemovalTimeoutId: number = -1;
   private favoriteRemovalRefreshTimeoutId: number = -1;
   private favoriteRemovalRefreshAttempt: number = 0;
   private openedFavoriteMutationListenerId: number = -1;
   private readonly loadTimeoutMillis: number = 30000;
+  private isPageAlive: boolean = false;
+  private requestSessionGeneration: number = 0;
+  private readonly collectionSnapshotSource: FourD4yCollectionSnapshotSource = new FourD4yCollectionSnapshotSource();
 
   aboutToAppear(): void {
+    this.isPageAlive = true;
     this.beginLoad();
   }
 
   aboutToDisappear(): void {
+    this.favoriteState.cache.releaseSnapshot(this.collectionSnapshotSource);
+    this.isPageAlive = false;
+    this.loadSequence++;
+    this.removeOperationSequence++;
     this.clearLoadWatchdog();
     this.clearFavoriteRemovalWatchdog();
+    this.clearOpenedFavoriteMutationListener();
   }
 
   build() {
@@ -223,9 +239,6 @@ export struct FavoritesPage {
           .fontColor($r('app.color.text_secondary'))
           .maxLines(1)
           .layoutWeight(1)
-        Text(favorite.replyCount + ' 回复')
-          .fontSize(13)
-          .fontColor($r('app.color.text_secondary'))
         Button(this.isRemovingFavorite ? '处理中…' : '取消收藏')
           .type(ButtonType.Normal)
           .fontSize(12)
@@ -292,7 +305,12 @@ export struct FavoritesPage {
   }
 
   private async beginLoad(): Promise<void> {
-    this.isLoggedIn = await FourD4ySession.isLoggedIn();
+    const sessionGeneration: number = this.accountState.getSessionGeneration();
+    const loggedIn: boolean = await FourD4ySession.isLoggedIn();
+    if (!this.isPageAlive || sessionGeneration !== this.accountState.getSessionGeneration()) {
+      return;
+    }
+    this.isLoggedIn = loggedIn;
     if (!this.isLoggedIn) {
       this.favorites = [];
       this.isLoading = false;
@@ -303,11 +321,13 @@ export struct FavoritesPage {
   }
 
   private loadFavoritePage(page: number, allowDuringRemoval: boolean = false): void {
-    if (!Number.isFinite(page) || page < 1 || (this.isRemovingFavorite && !allowDuringRemoval)) {
+    if (!this.isPageAlive || !Number.isFinite(page) || page < 1 ||
+      (this.isRemovingFavorite && !allowDuringRemoval)) {
       return;
     }
     const requestedPage: number = Math.max(1, Math.floor(page));
     this.loadSequence += 1;
+    this.requestSessionGeneration = this.accountState.getSessionGeneration();
     this.requestedPage = requestedPage;
     this.terminalLoadSequence = 0;
     this.isLoading = true;
@@ -342,11 +362,18 @@ export struct FavoritesPage {
   private async readFavoritesFromWeb(): Promise<void> {
     const expectedSequence: number = this.loadSequence;
     const expectedPage: number = this.requestedPage;
+    const sessionGeneration: number = this.accountState.getSessionGeneration();
     try {
+      await bindFourD4yCollectionCache(this.getUIContext().getHostContext() as common.Context,
+        this.webController, this.favoriteState.cache, 'favorites', () => this.isPageAlive &&
+          expectedSequence === this.loadSequence && sessionGeneration === this.accountState.getSessionGeneration());
+      if (!this.isPageAlive || expectedSequence !== this.loadSequence ||
+        sessionGeneration !== this.accountState.getSessionGeneration()) return;
       const rawResult: string = await this.webController.runJavaScript(
         this.getFavoritePageExtractionScript(expectedPage, expectedSequence)
       );
-      if (this.isLoadTerminal(expectedSequence) || expectedSequence !== this.loadSequence) {
+      if (!this.isPageAlive || this.requestSessionGeneration !== this.accountState.getSessionGeneration() ||
+        this.isLoadTerminal(expectedSequence) || expectedSequence !== this.loadSequence) {
         return;
       }
       const payload: FourD4yFavoritePagePayload | null = parseFourD4yFavoritePagePayload(rawResult);
@@ -372,7 +399,7 @@ export struct FavoritesPage {
       }
       this.favorites = payload.threads;
       this.favoriteState.observeServerFavorites(payload.threads.map((favorite: FourD4yFavoriteThread) =>
-        favorite.threadId));
+        favorite.threadId), payload.page, payload.lastPage, this.collectionSnapshotSource);
       this.currentPage = payload.page;
       this.lastPage = Math.max(payload.page, payload.lastPage);
       if (this.isRemovingFavorite && this.removingThreadId.length > 0) {
@@ -402,13 +429,16 @@ export struct FavoritesPage {
   }
 
   private async removeFavorite(threadId: string): Promise<void> {
-    if (!/^\d+$/.test(threadId) || this.isRemovingFavorite || this.isLoading ||
+    const sessionGeneration: number = this.requestSessionGeneration;
+    if (!this.isPageAlive || sessionGeneration !== this.accountState.getSessionGeneration() ||
+      !/^\d+$/.test(threadId) || this.isRemovingFavorite || this.isLoading ||
       !this.favorites.some((favorite: FourD4yFavoriteThread) => favorite.threadId === threadId)) {
       return;
     }
     const operationSequence: number = this.removeOperationSequence + 1;
     this.removeOperationSequence = operationSequence;
     this.removingThreadId = threadId;
+    this.removalVerificationPage = this.currentPage;
     this.isRemovingFavorite = true;
     this.statusMessage = '';
     this.startFavoriteRemovalWatchdog(operationSequence);
@@ -420,7 +450,8 @@ export struct FavoritesPage {
       const rawResult: string = await this.webController.runJavaScript(
         this.getFavoriteRemovalStartScript(threadId, operationSequence)
       );
-      if (operationSequence !== this.removeOperationSequence || threadId !== this.removingThreadId) {
+      if (!this.isPageAlive || sessionGeneration !== this.accountState.getSessionGeneration() ||
+        operationSequence !== this.removeOperationSequence || threadId !== this.removingThreadId) {
         return;
       }
       const payload: FourD4yFavoriteMutationStartPayload | null =
@@ -438,7 +469,8 @@ export struct FavoritesPage {
       // A successful native form submission can detach the page before this
       // JavaScript invocation returns. The page callbacks / watchdog own the
       // final outcome instead of treating that interruption as a failure.
-      if (operationSequence === this.removeOperationSequence && this.isRemovingFavorite) {
+      if (this.isPageAlive && sessionGeneration === this.accountState.getSessionGeneration() &&
+        operationSequence === this.removeOperationSequence && this.isRemovingFavorite) {
         this.statusMessage = '正在等待服务器确认取消收藏…';
       }
     }
@@ -446,9 +478,11 @@ export struct FavoritesPage {
 
   private startFavoriteRemovalWatchdog(operationSequence: number): void {
     this.clearFavoriteRemovalWatchdog();
+    const sessionGeneration: number = this.requestSessionGeneration;
     this.favoriteRemovalRefreshAttempt = 0;
     this.favoriteRemovalTimeoutId = setTimeout(() => {
-      if (this.isRemovingFavorite && operationSequence === this.removeOperationSequence) {
+      if (this.isPageAlive && sessionGeneration === this.accountState.getSessionGeneration() &&
+        this.isRemovingFavorite && operationSequence === this.removeOperationSequence) {
         this.failFavoriteRemoval(operationSequence,
           '取消收藏请求超时，服务器结果未确认；请刷新收藏列表核对。');
       }
@@ -461,6 +495,7 @@ export struct FavoritesPage {
    * checkbox's disappearance as the authoritative completion signal.
    */
   private scheduleFavoriteRemovalRefresh(operationSequence: number, delayMillis: number): void {
+    const sessionGeneration: number = this.requestSessionGeneration;
     if (!this.isRemovingFavorite || operationSequence !== this.removeOperationSequence) {
       return;
     }
@@ -468,12 +503,13 @@ export struct FavoritesPage {
       clearTimeout(this.favoriteRemovalRefreshTimeoutId);
     }
     this.favoriteRemovalRefreshTimeoutId = setTimeout(() => {
-      if (!this.isRemovingFavorite || operationSequence !== this.removeOperationSequence) {
+      if (!this.isPageAlive || sessionGeneration !== this.accountState.getSessionGeneration() ||
+        !this.isRemovingFavorite || operationSequence !== this.removeOperationSequence) {
         return;
       }
       this.favoriteRemovalRefreshAttempt += 1;
       this.statusMessage = '正在刷新服务器收藏列表…';
-      this.loadFavoritePage(1, true);
+      this.loadFavoritePage(this.removalVerificationPage, true);
     }, delayMillis);
   }
 
@@ -536,6 +572,9 @@ export struct FavoritesPage {
   }
 
   private isCurrentFavoriteRequest(url: string): boolean {
+    if (!this.isPageAlive || this.requestSessionGeneration !== this.accountState.getSessionGeneration()) {
+      return false;
+    }
     const sequenceToken: RegExp = new RegExp('[?&]oh_favorite_load=' + this.loadSequence + '(?:&|$)');
     const pageToken: RegExp = new RegExp('[?&]page=' + this.requestedPage + '(?:&|$)');
     return url.indexOf('/forum/my.php') >= 0 && url.indexOf('item=favorites') >= 0 &&
@@ -580,6 +619,7 @@ export struct FavoritesPage {
     if (sequence !== this.loadSequence) {
       return;
     }
+    this.favoriteState.cache.releaseSnapshot(this.collectionSnapshotSource);
     this.finishFavoriteLoad(sequence);
     this.statusMessage = message;
   }
@@ -593,6 +633,7 @@ export struct FavoritesPage {
       '  const forms = Array.from(document.forms || []);',
       '  const form = forms.find((candidate) => { try { const action = new URL(candidate.getAttribute("action") || location.href, location.href); return action.pathname.indexOf("/forum/my.php") >= 0 && action.searchParams.get("item") === "favorites" && (action.searchParams.get("type") || "thread") === "thread"; } catch (_) { return false; } });',
       '  const seen = new Set();',
+      '  const favoriteIds = new Set(form ? Array.from(form.elements || []).filter((node) => (node.getAttribute("name") || "") === "delete[]").map((node) => node.getAttribute("value") || "") : []);',
       '  const threads = [];',
       '  const rows = Array.from(document.querySelectorAll("table.datatable tbody tr, table.datatable tr"));',
       '  rows.forEach((row) => {',
@@ -600,7 +641,7 @@ export struct FavoritesPage {
       '    if (!threadLink) return;',
       '    let threadId = "";',
       '    try { const threadUrl = new URL(threadLink.getAttribute("href") || "", location.href); threadId = threadUrl.searchParams.get("tid") || ""; if (!threadId) { const matched = /thread-(\\d+)-/.exec(threadUrl.pathname); threadId = matched ? matched[1] : ""; } } catch (_) { return; }',
-      '    if (!/^\\d+$/.test(threadId) || seen.has(threadId)) return;',
+      '    if (!/^\\d+$/.test(threadId) || !favoriteIds.has(threadId) || seen.has(threadId)) return;',
       '    const forumCell = row.querySelector("td.forum");',
       '    const forumLink = forumCell ? forumCell.querySelector("a[href]") : null;',
       '    let forumId = "";',
@@ -610,8 +651,8 @@ export struct FavoritesPage {
       '    seen.add(threadId);',
       '    threads.push({ threadId: threadId, forumId: /^\\d+$/.test(forumId) ? forumId : "", title: text(threadLink).slice(0, 240), forumName: text(forumCell).slice(0, 80), replyCount: replyMatch ? Number.parseInt(replyMatch[0], 10) : 0, lastReplyAt: text(row.querySelector("td.lastpost")).slice(0, 140) });',
       '  });',
-      '  let lastPage = ' + page + ';',
-      '  Array.from(document.querySelectorAll("div.pages a, div.pages strong, .pg a, .pg strong")).forEach((node) => { const label = text(node); const value = /^\\d+$/.test(label) ? Number.parseInt(label, 10) : 0; if (value > lastPage) lastPage = value; });',
+      '  if (seen.size !== favoriteIds.size) return JSON.stringify({ extractionIncomplete: true });',
+      buildFourD4yCollectionPaginationScript('favorites', page),
       '  const alert = document.querySelector(".alert_info, .alert_error, #messagetext, .message");',
       '  return JSON.stringify({',
       '    page: ' + page + ', lastPage: lastPage, loadSequence: ' + loadSequence + ',',
@@ -631,14 +672,18 @@ export struct FavoritesPage {
       '  const finish = (started, errorMessage) => JSON.stringify({ threadId: threadId, operationSequence: ' + operationSequence + ', started: started, errorMessage: (errorMessage || "").slice(0, 180) });',
       '  const loginForm = document.querySelector("#loginform, form[name=login], input[name=username], input[name=password]");',
       '  if (loginForm) return finish(false, "登录状态已失效。");',
-      '  const form = Array.from(document.forms || []).find((candidate) => { try { const action = new URL(candidate.getAttribute("action") || location.href, location.href); return action.pathname.indexOf("/forum/my.php") >= 0 && action.searchParams.get("item") === "favorites"; } catch (_) { return false; } });',
+      '  const allowedAction = (value) => { try { const action = new URL(value || location.href, location.href); return action.origin === "https://www.4d4y.com" && !action.username && !action.password && action.pathname === "/forum/my.php" && action.searchParams.get("item") === "favorites" && (action.searchParams.get("type") || "thread") === "thread"; } catch (_) { return false; } };',
+      '  if (!allowedAction(location.href)) return finish(false, "当前页面不是收藏列表。");',
+      '  const form = Array.from(document.forms || []).find((candidate) => allowedAction(candidate.getAttribute("action")));',
       '  const checkbox = form ? Array.from(form.elements || []).find((node) => (node.getAttribute("name") || "") === "delete[]" && (node.getAttribute("value") || "") === threadId) : null;',
       '  const formhash = form ? Array.from(form.elements || []).find((node) => (node.getAttribute("name") || "") === "formhash") : null;',
       '  const submit = form ? Array.from(form.elements || []).find((node) => (node.getAttribute("name") || "") === "favsubmit") : null;',
       '  if (!form || !checkbox || !formhash || !submit) return finish(false, "当前收藏页未提供可确认的取消收藏表单。");',
+      '  const deletionInputs = Array.from(form.elements || []).filter((node) => (node.getAttribute("name") || "") === "delete[]");',
+      '  if (checkbox.disabled || deletionInputs.some((node) => node.type !== "checkbox") || !allowedAction(submit.getAttribute("formaction") || form.getAttribute("action"))) return finish(false, "取消收藏表单的提交范围无法确认。");',
       '  if (typeof form.requestSubmit !== "function") return finish(false, "当前页面不支持安全提交收藏表单。");',
       '  try {',
-      '    checkbox.checked = true;',
+      '    deletionInputs.forEach((node) => { node.checked = node === checkbox; });',
       '    form.requestSubmit(submit);',
       '    return finish(true, "");',
       '  } catch (_) { return finish(false, "取消收藏表单未能在当前页面启动。"); }',

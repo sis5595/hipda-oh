@@ -2,6 +2,7 @@ import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { createDefaultFourD4yUserSettings, FourD4yThemeMode, FourD4yUserSettings,
   parseFourD4yUserSettings, serializeFourD4yUserSettings } from '../../domain/settings/FourD4yUserSettings';
+import { mergeFourD4yUserSettingsChanges, normalizeFourD4yUserSettings } from '../../domain/settings/FourD4yUserSettings';
 
 const PREFERENCES_NAME: string = 'four_d4y_user_settings';
 const SETTINGS_KEY: string = 'settings_v1';
@@ -11,24 +12,53 @@ const SETTINGS_KEY: string = 'settings_v1';
  * cookies, form fields, and page content are never read or written here.
  */
 export class FourD4yUserSettingsStore {
+  private static writeTail: Promise<void> = Promise.resolve();
   static async load(context: common.Context): Promise<FourD4yUserSettings> {
+    // Preferences.put changes the shared memory cache before flush settles.
+    // Readers must wait for confirmed writes (or their rollback), too.
+    await FourD4yUserSettingsStore.writeTail;
     try {
       const store: preferences.Preferences = await preferences.getPreferences(context, PREFERENCES_NAME);
       const rawValue: string = store.getSync(SETTINGS_KEY, '') as string;
       return parseFourD4yUserSettings(rawValue);
     } catch (_error) {
-      return createDefaultFourD4yUserSettings();
+      throw new Error('user-settings-read-failed');
     }
   }
 
-  static async save(context: common.Context, settings: FourD4yUserSettings): Promise<boolean> {
+  static async save(context: common.Context, settings: FourD4yUserSettings,
+    before: FourD4yUserSettings): Promise<FourD4yUserSettings | undefined> {
+    const next: FourD4yUserSettings = normalizeFourD4yUserSettings(settings);
+    const baseline: FourD4yUserSettings = normalizeFourD4yUserSettings(before);
+    const result: Promise<FourD4yUserSettings | undefined> = FourD4yUserSettingsStore.writeTail.then(() =>
+      FourD4yUserSettingsStore.saveChangesLocked(context, next, baseline));
+    FourD4yUserSettingsStore.writeTail = result.then(() => {}, () => {});
+    return result;
+  }
+
+  private static async saveChangesLocked(context: common.Context, next: FourD4yUserSettings,
+    before: FourD4yUserSettings): Promise<FourD4yUserSettings | undefined> {
+    let store: preferences.Preferences | undefined = undefined;
+    let previousRaw: string | undefined = undefined;
     try {
-      const store: preferences.Preferences = await preferences.getPreferences(context, PREFERENCES_NAME);
-      await store.put(SETTINGS_KEY, serializeFourD4yUserSettings(settings));
+      store = await preferences.getPreferences(context, PREFERENCES_NAME);
+      previousRaw = store.getSync(SETTINGS_KEY, '') as string;
+      const merged: FourD4yUserSettings = mergeFourD4yUserSettingsChanges(
+        parseFourD4yUserSettings(previousRaw), before, next);
+      await store.put(SETTINGS_KEY, serializeFourD4yUserSettings(merged));
       await store.flush();
-      return true;
+      return merged;
     } catch (_error) {
-      return false;
+      // put modifies the Preferences memory cache before flush. Do not let a
+      // failed write masquerade as a confirmed baseline for the next writer.
+      if (store !== undefined && previousRaw !== undefined) {
+        try {
+          await store.put(SETTINGS_KEY, previousRaw);
+        } catch (_rollbackError) {
+          // Report failure; this is not a disk transaction or a guaranteed rollback.
+        }
+      }
+      return undefined;
     }
   }
 

@@ -24,6 +24,7 @@ export interface FourD4yAttentionVerificationPayload {
   threadId: string;
   operationSequence: number;
   page: number;
+  lastPage: number;
   accessState: FourD4yPageAccessState;
   hasChallenge: boolean;
   formFound: boolean;
@@ -48,6 +49,7 @@ export function parseFourD4yAttentionVerificationPayload(rawResult: string): Fou
     threadId: favoritePayload.threadId,
     operationSequence: favoritePayload.operationSequence,
     page: favoritePayload.page,
+    lastPage: favoritePayload.lastPage,
     accessState: favoritePayload.accessState,
     hasChallenge: favoritePayload.hasChallenge,
     formFound: favoritePayload.formFound,
@@ -62,6 +64,7 @@ export function isExpectedFourD4yAttentionVerificationPayload(payload: FourD4yAt
     threadId: payload.threadId,
     operationSequence: payload.operationSequence,
     page: payload.page,
+    lastPage: payload.lastPage,
     accessState: payload.accessState,
     hasChallenge: payload.hasChallenge,
     formFound: payload.formFound,

@@ -8,14 +8,37 @@ import { extractFourD4ySetCookieHeaders } from './FourD4yResponseCookieBridge';
  * P-10 may additionally pass a bounded 4D4Y-only snapshot to Asset Store.
  */
 export class FourD4ySession {
+  private static cookieMutationTail: Promise<void> = Promise.resolve();
+  private static lastAuthenticationDiagnostic: string = '';
+
+  // Fixed labels only: never log cookie headers, errors (which can contain
+  // request data), account identifiers, or the secure-store snapshot.
+  private static reportAuthenticationDiagnostic(state: string): void {
+    if (state !== FourD4ySession.lastAuthenticationDiagnostic) {
+      FourD4ySession.lastAuthenticationDiagnostic = state;
+      console.info('[HiPDAOHSession] authentication=' + state);
+    }
+  }
+
+  // Serialize app-owned writes: a response cookie may not interleave with
+  // clearing/restoring an account. ArkWeb's own network remains Web-owned.
+  private static serializeCookieMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const result: Promise<T> = FourD4ySession.cookieMutationTail.then(operation);
+    FourD4ySession.cookieMutationTail = result.then(() => {}, () => {});
+    return result;
+  }
   static readonly forumRoot: string = 'https://www.4d4y.com/forum/';
   static readonly fullSiteUserAgent: string =
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36';
 
   static async getCookieHeader(): Promise<string> {
     try {
-      return await webview.WebCookieManager.fetchCookie(FourD4ySession.forumRoot, false);
+      const header: string = await webview.WebCookieManager.fetchCookie(FourD4ySession.forumRoot, false);
+      FourD4ySession.reportAuthenticationDiagnostic(
+        FourD4ySession.hasAuthenticationCookie(header) ? 'present' : 'absent');
+      return header;
     } catch (_error) {
+      FourD4ySession.reportAuthenticationDiagnostic('read-failed');
       return '';
     }
   }
@@ -25,8 +48,17 @@ export class FourD4ySession {
     return FourD4ySession.hasAuthenticationCookie(cookieHeader);
   }
 
+  static async getAuthenticationState(): Promise<string> {
+    try {
+      const header: string = await webview.WebCookieManager.fetchCookie(FourD4ySession.forumRoot, false);
+      return FourD4ySession.hasAuthenticationCookie(header) ? 'present' : 'absent';
+    } catch (_error) {
+      return 'read-failed';
+    }
+  }
+
   static hasAuthenticationCookie(cookieHeader: string): boolean {
-    return /(?:^|;\s*)cdb_auth=/i.test(cookieHeader);
+    return /(?:^|;\s*)cdb_auth=[^;\s]+/i.test(cookieHeader);
   }
 
   /**
@@ -50,13 +82,30 @@ export class FourD4ySession {
     return FourD4ySession.createAccountSessionSecret(await FourD4ySession.getCookieHeader());
   }
 
+  /** Check an in-memory verified snapshot without exposing either token. */
+  static async isCurrentAccountSessionSecret(secret: string): Promise<boolean> {
+    // A usable live snapshot can exceed Asset Store's bound. That is a storage
+    // failure, not evidence that the already verified login became invalid.
+    const pairs: FourD4ySessionCookiePair[] = FourD4ySession.getSessionCookiePairs(secret.replace(/\n/g, '; '));
+    const auth: FourD4ySessionCookiePair | undefined = pairs.find((pair: FourD4ySessionCookiePair) =>
+      pair.name === 'cdb_auth');
+    return auth !== undefined && auth.value ===
+      FourD4ySession.authenticationValue(await FourD4ySession.getCookieHeader());
+  }
+
   /**
    * Replaces only the forum session-cookie names. Normal ArkWeb has one
    * cookie profile for this app, so named-account isolation is implemented by
-   * atomically restoring a verified snapshot before a server verification.
+   * restoring a verified snapshot before a server verification. App-owned
+   * cookie mutations are serialized; this is not an ArkWeb transaction.
    * External-site cookies are intentionally untouched.
    */
   static async restoreAccountSessionSecret(sessionSecret: string): Promise<boolean> {
+    return FourD4ySession.serializeCookieMutation(() =>
+      FourD4ySession.restoreAccountSessionSecretLocked(sessionSecret));
+  }
+
+  private static async restoreAccountSessionSecretLocked(sessionSecret: string): Promise<boolean> {
     const desiredPairs: FourD4ySessionCookiePair[] = FourD4ySession.parseAccountSessionSecret(sessionSecret);
     if (desiredPairs.length === 0 || desiredPairs.findIndex((pair: FourD4ySessionCookiePair) =>
       pair.name === 'cdb_auth') < 0) {
@@ -124,7 +173,9 @@ export class FourD4ySession {
   static async persistVerifiedAuthentication(): Promise<void> {
     try {
       await webview.WebCookieManager.saveCookieAsync();
+      console.info('[HiPDAOHSession] verified-flush=success');
     } catch (_error) {
+      console.info('[HiPDAOHSession] verified-flush=failed');
       // A disk flush failure must not invalidate an in-memory authenticated
       // session. The caller has already verified it against the live page.
     }
@@ -135,9 +186,23 @@ export class FourD4ySession {
    * cookies returned by the fixed 4D4Y forum origin are accepted. Values are
    * never exposed to the UI or logs.
    */
-  static async acceptNativeResponseCookies(url: string, responseHeaders: Object): Promise<number> {
+  static async acceptNativeResponseCookies(url: string, responseHeaders: Object,
+    requestCookieHeader: string): Promise<number> {
+    return FourD4ySession.serializeCookieMutation(() =>
+      FourD4ySession.acceptNativeResponseCookiesLocked(url, responseHeaders, requestCookieHeader));
+  }
+
+  private static async acceptNativeResponseCookiesLocked(url: string, responseHeaders: Object,
+    requestCookieHeader: string): Promise<number> {
     if (!/^https:\/\/www\.4d4y\.com\/forum\//i.test(url)) {
-      return 0;
+      return -1;
+    }
+    // Authentication is compared only in memory. A late response belongs to
+    // the account that sent it, not whichever account is now active.
+    const requestedAuth: string = FourD4ySession.authenticationValue(requestCookieHeader);
+    const activeAuth: string = FourD4ySession.authenticationValue(await FourD4ySession.getCookieHeader());
+    if (requestedAuth.length === 0 || requestedAuth !== activeAuth) {
+      return -1;
     }
     const cookies: string[] = extractFourD4ySetCookieHeaders(responseHeaders);
     let acceptedCount: number = 0;
@@ -162,6 +227,15 @@ export class FourD4ySession {
   }
 
   static async clearPersistentAuthentication(): Promise<void> {
+    return FourD4ySession.serializeCookieMutation(() => FourD4ySession.clearPersistentAuthenticationLocked());
+  }
+
+  private static authenticationValue(cookieHeader: string): string {
+    const match: RegExpMatchArray | null = cookieHeader.match(/(?:^|;\s*)cdb_auth=([^;\s]+)/i);
+    return match === null ? '' : match[1];
+  }
+
+  private static async clearPersistentAuthenticationLocked(): Promise<void> {
     try {
       const currentPairs: FourD4ySessionCookiePair[] =
         FourD4ySession.getSessionCookiePairs(await FourD4ySession.getCookieHeader());

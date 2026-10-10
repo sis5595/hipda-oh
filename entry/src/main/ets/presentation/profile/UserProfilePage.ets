@@ -41,7 +41,6 @@ export struct UserProfilePage {
 
   aboutToDisappear(): void {
     this.loadSequence += 1;
-    this.isLoading = false;
     this.clearLoadWatchdog();
   }
 

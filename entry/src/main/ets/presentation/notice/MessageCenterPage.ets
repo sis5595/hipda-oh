@@ -69,7 +69,6 @@ export struct MessageCenterPage {
     this.promptSequence += 1;
     this.postResolveSequence += 1;
     this.privateSearchSequence += 1;
-    this.clearPrivateSearchResults();
     this.clearLoadWatchdog();
     this.clearPostResolveWatchdog();
   }
@@ -150,6 +149,11 @@ export struct MessageCenterPage {
       if (!this.isLoading && !this.isResolvingPost && !this.isPrivateSearchRunning && this.selectedMode !== mode) {
         this.clearPrivateSearchResults();
         this.selectedMode = mode;
+        // Never reuse a previous tab's rows if this tab's first read fails.
+        this.items = [];
+        this.currentPage = 1;
+        this.lastPage = 1;
+        this.viewerUserId = '';
         this.loadPage(1);
       }
     })
@@ -553,7 +557,8 @@ export struct MessageCenterPage {
         return;
       }
       if (result.status === 'request-failed') {
-        this.failLoad(expectedLoadSequence, '暂时无法读取 4D4Y 消息，请检查网络后重试。');
+        this.failLoad(expectedLoadSequence, describeFourD4yNativeRequestFailure(result.failure) +
+          '，请刷新重试。', true);
         return;
       }
       const payload: FourD4yMessagePagePayload | null = result.payload;
@@ -589,7 +594,7 @@ export struct MessageCenterPage {
         '暂无' + this.getModeLabel(requestMode) + '。' : '';
     } catch (_error) {
       if (this.isLoading && this.loadSequence === expectedLoadSequence) {
-        this.failLoad(expectedLoadSequence, '暂时无法读取 4D4Y 消息，请稍后重试。');
+        this.failLoad(expectedLoadSequence, '暂时无法读取 4D4Y 消息，请稍后重试。', true);
       }
     }
   }
@@ -597,9 +602,10 @@ export struct MessageCenterPage {
   private async loadPromptCounts(): Promise<void> {
     const expectedPromptSequence: number = this.promptSequence + 1;
     this.promptSequence = expectedPromptSequence;
+    const sharedRefresh: number = this.unreadState.beginRefresh();
     try {
       const result: FourD4yNativeMessagePromptResult = await this.nativeClient.loadPrompt(expectedPromptSequence);
-      if (this.promptSequence !== expectedPromptSequence) {
+      if (this.promptSequence !== expectedPromptSequence || !this.unreadState.isCurrentRefresh(sharedRefresh)) {
         return;
       }
       if (result.status === 'cookie-missing' || result.status === 'server-login-required') {
@@ -990,7 +996,7 @@ export struct MessageCenterPage {
     this.clearLoadWatchdog();
     this.loadTimeoutId = setTimeout(() => {
       if (this.isLoading && this.loadSequence === loadSequence) {
-        this.failLoad(loadSequence, '读取 4D4Y 消息超时，请重试。');
+        this.failLoad(loadSequence, '读取 4D4Y 消息超时，请重试。', true);
       }
     }, this.timeoutMillis);
   }
@@ -1002,15 +1008,21 @@ export struct MessageCenterPage {
     }
   }
 
-  private failLoad(loadSequence: number, message: string): void {
+  private failLoad(loadSequence: number, message: string, preserveSnapshot: boolean = false): void {
     if (loadSequence !== this.loadSequence) {
       return;
     }
     this.clearLoadWatchdog();
     this.terminalLoadSequence = loadSequence;
     this.isLoading = false;
-    this.items = [];
-    this.statusMessage = message;
+    // Match NG's ordinary onFail: retain the last confirmed list, not an
+    // apparent empty inbox. Authentication/layout failures still clear it.
+    if (!preserveSnapshot) {
+      this.items = [];
+      this.viewerUserId = '';
+    }
+    this.statusMessage = preserveSnapshot && this.items.length > 0 ?
+      message + ' 当前显示上次读取的列表。' : message;
   }
 
   private startPostResolveWatchdog(resolveSequence: number): void {

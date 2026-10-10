@@ -9,7 +9,9 @@ import { FourD4yPrivateConversationPayload,
   '../../domain/notice/FourD4yPrivateConversationContracts';
 import { appendFourD4ySessionId } from './FourD4yRequestCookieBridge';
 import { FourD4ySession } from './FourD4ySession';
-import { parseFourD4yNativeMessagePage, parseFourD4yNativeMessagePrompt } from
+import { FourD4yNativeRedirectBoundary } from './FourD4yNativeRedirectBoundary';
+import { parseFourD4yNativeMessagePage, parseFourD4yNativeMessagePrompt,
+  parseFourD4yUnreadPrivateMessageCount } from
   './FourD4yMessageNativeParser';
 import { parseFourD4yPrivateConversationPage } from './FourD4yPrivateConversationNativeParser';
 import { classifyFourD4yHttpFailure, classifyFourD4yNetworkFailure,
@@ -52,7 +54,7 @@ interface FourD4yNativeMessageAttempt<T> {
  */
 export class FourD4yMessageNativeClient {
   private readonly decoder: util.TextDecoder = util.TextDecoder.create('gbk');
-  private readonly promptUrl: string = 'https://www.4d4y.com/forum/index.php';
+  private readonly promptUrl: string = 'https://www.4d4y.com/forum/pm.php?filter=newpm';
 
   async loadPage(url: string, loadSequence: number): Promise<FourD4yNativeMessagePageResult> {
     if (!isAllowedFourD4yMessagePageUrl(url) || loadSequence < 1) {
@@ -141,6 +143,11 @@ export class FourD4yMessageNativeClient {
     if (payload === null) {
       return this.promptAttempt('unsupported-response', null, response.acceptedCookieCount);
     }
+    if (payload.accessState !== 'loginRequired') {
+      const unreadCount: number | null = parseFourD4yUnreadPrivateMessageCount(response.html);
+      if (unreadCount === null) return this.promptAttempt('unsupported-response', null, response.acceptedCookieCount);
+      payload.privateMessageCount = unreadCount;
+    }
     return this.promptAttempt(payload.accessState === 'loginRequired' ? 'server-login-required' : 'success',
       payload, response.acceptedCookieCount);
   }
@@ -164,6 +171,8 @@ export class FourD4yMessageNativeClient {
     const requestUrl: string = appendFourD4ySessionId(url, cookieHeader);
     const request: http.HttpRequest = http.createHttp();
     try {
+      const boundary: FourD4yNativeRedirectBoundary = new FourD4yNativeRedirectBoundary(requestUrl);
+      boundary.attach(request);
       const response: http.HttpResponse = await request.request(requestUrl, {
         method: http.RequestMethod.GET,
         expectDataType: http.HttpDataType.ARRAY_BUFFER,
@@ -181,7 +190,8 @@ export class FourD4yMessageNativeClient {
           'Referer': referer
         }
       });
-      if (response.responseCode !== http.ResponseCode.OK || !(response.result instanceof ArrayBuffer)) {
+      if (!boundary.isResponseAllowed() || response.responseCode !== http.ResponseCode.OK ||
+        !(response.result instanceof ArrayBuffer)) {
         const failure: FourD4yNativeRequestFailure = classifyFourD4yHttpFailure(
           response.responseCode, response.result instanceof ArrayBuffer);
         hilog.warn(FOUR_D4Y_MESSAGE_LOG_DOMAIN, FOUR_D4Y_MESSAGE_LOG_TAG,
@@ -189,7 +199,11 @@ export class FourD4yMessageNativeClient {
           response.responseCode, failure.kind);
         return { status: 'request-failed', html: '', acceptedCookieCount: 0, failure: failure };
       }
-      const acceptedCookieCount: number = await FourD4ySession.acceptNativeResponseCookies(requestUrl, response.header);
+      const acceptedCookieCount: number = await FourD4ySession.acceptNativeResponseCookies(
+        requestUrl, response.header, cookieHeader);
+      if (acceptedCookieCount < 0) {
+        return { status: 'request-failed', html: '', acceptedCookieCount: 0, failure: null };
+      }
       return {
         status: 'success',
         html: this.decoder.decodeToString(new Uint8Array(response.result)),

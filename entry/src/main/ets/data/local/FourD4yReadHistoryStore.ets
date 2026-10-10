@@ -13,7 +13,7 @@ export class FourD4yReadHistoryStore {
       const store: preferences.Preferences = await preferences.getPreferences(context, PREFERENCES_NAME);
       return parseFourD4yReadHistory(store.getSync(HISTORY_KEY, '') as string);
     } catch (_error) {
-      return [];
+      throw new Error('read-history-load-failed');
     }
   }
 

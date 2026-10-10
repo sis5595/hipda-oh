@@ -18,12 +18,19 @@ export struct SettingsPage {
   @State isLoading: boolean = true;
   @State statusMessage: string = '';
   @State isSaving: boolean = false;
+  @State hasLoadedSettings: boolean = false;
+  private isSettingsPageAlive: boolean = false;
 
   private readonly forums: ForumSummary[] = getFourD4yForums();
   private pathStack: NavPathStack = new NavPathStack();
 
   aboutToAppear(): void {
+    this.isSettingsPageAlive = true;
     void this.loadSettings();
+  }
+
+  aboutToDisappear(): void {
+    this.isSettingsPageAlive = false;
   }
 
   build() {
@@ -39,6 +46,9 @@ export struct SettingsPage {
           this.buildPrivacySection();
           Divider().color($r('app.color.border'));
           this.buildQuickForumsSection();
+          if (!this.isLoading && !this.hasLoadedSettings) {
+            Button('重试读取设置').onClick(() => { void this.loadSettings(); });
+          }
           if (this.statusMessage.length > 0) {
             Text(this.statusMessage)
               .fontSize(13)
@@ -59,6 +69,9 @@ export struct SettingsPage {
       this.pathStack = context.pathStack;
     })
     .onBackPressed((): boolean => {
+      if (this.isSaving) {
+        return true;
+      }
       // Home refreshes its quick-forum chips from the persisted preferences in its onPop callback.
       // NavPathStack only invokes that callback when a result accompanies pop().
       this.pathStack.pop(new SettingsPagePopResult());
@@ -90,7 +103,7 @@ export struct SettingsPage {
             .fontSize(14)
             .fontColor(this.settings.fontScale === scale ? $r('app.color.on_brand') : $r('app.color.text_body'))
             .backgroundColor(this.settings.fontScale === scale ? $r('app.color.brand') : $r('app.color.fill_subtle'))
-            .enabled(!this.isLoading && !this.isSaving)
+            .enabled(this.hasLoadedSettings && !this.isLoading && !this.isSaving)
             .onClick(() => {
               void this.updateSettings(this.withFontScale(scale));
             });
@@ -111,7 +124,7 @@ export struct SettingsPage {
             .backgroundColor(this.settings.postLineSpacing === spacing ? $r('app.color.brand') :
               $r('app.color.fill_subtle'))
             .layoutWeight(1)
-            .enabled(!this.isLoading && !this.isSaving)
+            .enabled(this.hasLoadedSettings && !this.isLoading && !this.isSaving)
             .onClick(() => {
               void this.updateSettings(this.withPostLineSpacing(spacing));
             });
@@ -135,7 +148,7 @@ export struct SettingsPage {
       .backgroundColor(this.settings.themeMode === mode ? $r('app.color.brand') : $r('app.color.fill_subtle'))
       .borderRadius(6)
       .height(36)
-      .enabled(!this.isLoading && !this.isSaving)
+      .enabled(this.hasLoadedSettings && !this.isLoading && !this.isSaving)
       .onClick(() => {
         void this.updateSettings(this.withThemeMode(mode));
       });
@@ -170,7 +183,7 @@ export struct SettingsPage {
       .backgroundColor(this.settings.imageLoadPolicy === policy ? $r('app.color.brand') : $r('app.color.fill_subtle'))
       .borderRadius(6)
       .height(36)
-      .enabled(!this.isLoading && !this.isSaving)
+      .enabled(this.hasLoadedSettings && !this.isLoading && !this.isSaving)
       .onClick(() => {
         void this.updateSettings(this.withImageLoadPolicy(policy));
       });
@@ -284,7 +297,7 @@ export struct SettingsPage {
         .width(34)
         .height(34)
         .textAlign(TextAlign.Center)
-        .enabled(index > 0 && !this.isSaving)
+        .enabled(this.hasLoadedSettings && index > 0 && !this.isSaving)
         .onClick(() => {
           void this.updateSettings(this.withQuickForumIds(
             moveFourD4yQuickForumId(this.settings.quickForumIds, forumId, -1)));
@@ -296,7 +309,7 @@ export struct SettingsPage {
         .width(34)
         .height(34)
         .textAlign(TextAlign.Center)
-        .enabled(index < this.settings.quickForumIds.length - 1 && !this.isSaving)
+        .enabled(this.hasLoadedSettings && index < this.settings.quickForumIds.length - 1 && !this.isSaving)
         .onClick(() => {
           void this.updateSettings(this.withQuickForumIds(
             moveFourD4yQuickForumId(this.settings.quickForumIds, forumId, 1)));
@@ -306,7 +319,7 @@ export struct SettingsPage {
         .fontColor($r('app.color.danger_text'))
         .height(34)
         .padding({ left: 6, right: 2 })
-        .enabled(this.settings.quickForumIds.length > 1 && !this.isSaving)
+        .enabled(this.hasLoadedSettings && this.settings.quickForumIds.length > 1 && !this.isSaving)
         .onClick(() => {
           void this.updateSettings(this.withQuickForumIds(
             this.settings.quickForumIds.filter((id: string) => id !== forumId)));
@@ -330,7 +343,7 @@ export struct SettingsPage {
         .fontColor($r('app.color.brand'))
         .height(34)
         .padding({ left: 10, right: 2 })
-        .enabled(this.settings.quickForumIds.length < FOUR_D4Y_MAX_QUICK_FORUMS && !this.isSaving)
+        .enabled(this.hasLoadedSettings && this.settings.quickForumIds.length < FOUR_D4Y_MAX_QUICK_FORUMS && !this.isSaving)
         .onClick(() => {
           void this.updateSettings(this.withQuickForumIds([...this.settings.quickForumIds, forum.id]));
         });
@@ -349,20 +362,32 @@ export struct SettingsPage {
   }
 
   private async loadSettings(): Promise<void> {
+    if (!this.isSettingsPageAlive || (this.isLoading && this.hasLoadedSettings)) {
+      return;
+    }
     this.isLoading = true;
+    this.hasLoadedSettings = false;
     this.statusMessage = '';
     try {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
-      this.settings = await FourD4yUserSettingsStore.load(context);
+      const settings: FourD4yUserSettings = await FourD4yUserSettingsStore.load(context);
+      if (!this.isSettingsPageAlive) {
+        return;
+      }
+      this.settings = settings;
+      this.hasLoadedSettings = true;
     } catch (_error) {
+      if (!this.isSettingsPageAlive) {
+        return;
+      }
       this.settings = createDefaultFourD4yUserSettings();
-      this.statusMessage = '读取本地设置失败，已使用默认值。';
+      this.statusMessage = '读取本地设置失败，当前仅显示默认值；重试成功后可修改。';
     }
     this.isLoading = false;
   }
 
   private async updateSettings(nextSettings: FourD4yUserSettings): Promise<void> {
-    if (this.isSaving) {
+    if (!this.isSettingsPageAlive || this.isSaving || this.isLoading || !this.hasLoadedSettings) {
       return;
     }
     const normalized: FourD4yUserSettings = normalizeFourD4yUserSettings(nextSettings);
@@ -372,16 +397,23 @@ export struct SettingsPage {
     this.statusMessage = '';
     try {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
-      const saved: boolean = await FourD4yUserSettingsStore.save(context, normalized);
-      if (!saved) {
+      const saved: FourD4yUserSettings | undefined = await FourD4yUserSettingsStore.save(context, normalized, previous);
+      if (!this.isSettingsPageAlive) {
+        return;
+      }
+      if (saved === undefined) {
         this.settings = previous;
         this.statusMessage = '保存设置失败，请重试。';
         this.isSaving = false;
         return;
       }
-      FourD4yUserSettingsStore.applyAppearance(context.getApplicationContext(), normalized);
+      this.settings = saved;
+      FourD4yUserSettingsStore.applyAppearance(context.getApplicationContext(), saved);
       this.statusMessage = '已保存。';
     } catch (_error) {
+      if (!this.isSettingsPageAlive) {
+        return;
+      }
       this.settings = previous;
       this.statusMessage = '保存设置失败，请重试。';
     }

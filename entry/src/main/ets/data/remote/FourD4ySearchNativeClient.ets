@@ -2,6 +2,7 @@ import http from '@ohos.net.http';
 import util from '@ohos.util';
 import { FourD4ySearchPagePayload, isAllowedFourD4ySearchPageUrl } from '../../domain/search/FourD4ySearchContracts';
 import { FourD4ySession } from './FourD4ySession';
+import { FourD4yNativeRedirectBoundary } from './FourD4yNativeRedirectBoundary';
 import { parseFourD4yNativeSearchPage } from './FourD4ySearchNativeParser';
 import { appendFourD4ySessionId } from './FourD4yRequestCookieBridge';
 
@@ -57,6 +58,8 @@ export class FourD4ySearchNativeClient {
     cookieHeader: string): Promise<FourD4yNativeSearchAttempt> {
     const request: http.HttpRequest = http.createHttp();
     try {
+      const boundary: FourD4yNativeRedirectBoundary = new FourD4yNativeRedirectBoundary(requestUrl);
+      boundary.attach(request);
       const response: http.HttpResponse = await request.request(requestUrl, {
         method: http.RequestMethod.GET,
         expectDataType: http.HttpDataType.ARRAY_BUFFER,
@@ -76,11 +79,15 @@ export class FourD4ySearchNativeClient {
           'Referer': FourD4ySession.forumRoot + 'search.php'
         }
       });
-      if (response.responseCode !== http.ResponseCode.OK || !(response.result instanceof ArrayBuffer)) {
+      if (!boundary.isResponseAllowed() || response.responseCode !== http.ResponseCode.OK ||
+        !(response.result instanceof ArrayBuffer)) {
         return this.attempt('request-failed', null, 0);
       }
       const acceptedCookieCount: number = await FourD4ySession.acceptNativeResponseCookies(
-        requestUrl, response.header);
+        requestUrl, response.header, cookieHeader);
+      if (acceptedCookieCount < 0) {
+        return this.attempt('request-failed', null, 0);
+      }
       const pageHtml: string = this.decoder.decodeToString(new Uint8Array(response.result));
       const payload: FourD4ySearchPagePayload | null = parseFourD4yNativeSearchPage(pageHtml, requestUrl, loadSequence);
       if (payload === null) {

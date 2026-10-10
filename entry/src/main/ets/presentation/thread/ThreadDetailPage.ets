@@ -1,4 +1,6 @@
 import { common, Want } from '@kit.AbilityKit';
+import { bindFourD4yCollectionCache } from '../common/FourD4yCollectionCacheBinding';
+import { FourD4yRowVersions } from '../common/FourD4yRowVersions';
 import { uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { webview } from '@kit.ArkWeb';
 import { pasteboard } from '@kit.BasicServicesKit';
@@ -14,8 +16,11 @@ import { createUserProfileRouteParams } from '../profile/UserProfileRouteState';
 import { createEditComposerRouteParams, createQuoteComposerRouteParams, createReplyComposerRouteParams,
   isForumComposerPostEditedResult, isForumComposerReplyPublishedResult } from '../composer/ForumComposerRouteState';
 import { FourD4ySession } from '../../data/remote/FourD4ySession';
+import { buildFourD4yPostFormBoundaryScript, isCurrentFourD4yPostPreflightUrl } from '../../domain/composer/FourD4yPostFormBoundary';
 import { FourD4yFavoriteState } from '../../domain/favorite/FourD4yFavoriteState';
-import { buildFourD4yFavoriteAddUrl, FourD4yFavoriteMutationStartPayload, FourD4yFavoriteOperationPayload, FourD4yFavoriteVerificationPayload,
+import { buildFourD4yCollectionPaginationScript, buildFourD4yCollectionVerificationBoundaryScript, FourD4yCollectionVerificationStep,
+  getFourD4yCollectionVerificationStep } from '../../domain/favorite/FourD4yCollectionPagination';
+import { buildFourD4yFavoriteOperationUrl, FourD4yFavoriteMutationStartPayload, FourD4yFavoriteOperationPayload, FourD4yFavoriteVerificationPayload,
   isAllowedFourD4yFavoriteOperationUrl,
   isExpectedFourD4yFavoriteMutationStartPayload, isExpectedFourD4yFavoriteOperationPayload,
   isExpectedFourD4yFavoriteVerificationPayload, parseFourD4yFavoriteMutationStartPayload,
@@ -59,6 +64,11 @@ import { isQualifiedFourD4yRightSwipe } from '../../domain/navigation/FourD4yHor
 import { countObservedLastPageReplies, FourD4yObservedReplyCounts } from
   '../../domain/thread/FourD4yObservedReplyCounts';
 import { FourD4yAccountState } from '../../domain/account/FourD4yAccountState';
+import { FourD4yThreadMutationState } from '../../domain/thread/FourD4yThreadMutationState';
+
+// Multiple topic pages may retain downloads at once. A page-local counter
+// alone can point two independent downloads at the same sandbox file.
+let attachmentArtifactSequence: number = 0;
 
 enum ReplyWebOperation {
   Preflight = 'preflight',
@@ -91,6 +101,7 @@ export struct ThreadDetailPage {
   @Consume('readHistoryState') readHistoryState: FourD4yReadHistoryState;
   @Consume('observedReplyCounts') observedReplyCounts: FourD4yObservedReplyCounts;
   @Consume('accountState') accountState: FourD4yAccountState;
+  @Consume('threadMutationState') threadMutationState: FourD4yThreadMutationState;
   @State route: ThreadRouteParams = {
     threadId: '',
     threadTitle: '',
@@ -105,7 +116,11 @@ export struct ThreadDetailPage {
     initialAttentionPage: 1
   };
   @State posts: ThreadPost[] = [];
+  private readonly postRowVersions: FourD4yRowVersions<ThreadPost> =
+    new FourD4yRowVersions<ThreadPost>((post: ThreadPost): string => post.id);
   @State currentPage: number = 1;
+  // currentPage is the loaded range's end after append, not its visible top.
+  private firstRenderedPage: number = 1;
   @State lastPage: number = 1;
   @State selectedPage: number = 1;
   @State isPagePickerVisible: boolean = false;
@@ -127,6 +142,7 @@ export struct ThreadDetailPage {
   @State isReplyPreflightLoading: boolean = false;
   @State isReplySubmitting: boolean = false;
   @State replyPreflightMessage: string = '';
+  @State replySubmissionErrorMessage: string = '';
   @State isReplyFormReady: boolean = false;
   @State replyFormUrl: string = 'about:blank';
   @State isFavoriteOperationLoading: boolean = false;
@@ -181,6 +197,9 @@ export struct ThreadDetailPage {
   private isAppendingThreadPage: boolean = false;
   private pendingFloor: number = 0;
   private pendingPostId: string = '';
+  private postLayoutAnchorIndex: number = -1;
+  private postLayoutAnchorRevision: number = 0;
+  private postLayoutAnchorQueued: boolean = false;
   /** One-shot endpoint target used by the double-tap page picker. */
   private pendingFirstPostOfPage: boolean = false;
   /**
@@ -212,6 +231,7 @@ export struct ThreadDetailPage {
   private quickReplySendLongPressed: boolean = false;
   private previousQuickReplyKeyboardAvoidMode: KeyboardAvoidMode = KeyboardAvoidMode.OFFSET;
   private hasAdjustedQuickReplyKeyboardAvoidMode: boolean = false;
+  private isPostContextMenuVisible: boolean = false;
   private postDeletionPreflightUrl: string = '';
   private postDeletionPreflightSequence: number = 0;
   private postDeletionPreflightPostId: string = '';
@@ -267,14 +287,27 @@ export struct ThreadDetailPage {
   private attachmentTemporaryPath: string = '';
   private attachmentDisplayName: string = '';
   private attachmentDownloadGuid: string = '';
+  private isThreadPageAlive: boolean = false;
 
   aboutToAppear(): void {
+    this.isThreadPageAlive = true;
     this.observedReplyCounts.syncSession(this.accountState.getSessionGeneration());
     this.subscribeToBlacklistState();
     void this.restoreReaderSettings();
   }
 
   aboutToDisappear(): void {
+    this.isThreadPageAlive = false;
+    this.cancelPostLayoutAnchor();
+    this.webLoadSequence += 1;
+    this.replyPreflightSequence += 1;
+    this.replySubmissionSequence += 1;
+    this.votePreflightSequence += 1;
+    this.voteSubmissionSequence += 1;
+    this.favoriteOperationSequence += 1;
+    this.favoriteSubmissionSequence += 1;
+    this.attentionOperationSequence += 1;
+    this.attentionSubmissionSequence += 1;
     this.blacklistSnapshotLoadSequence += 1;
     this.postDeletionPreflightSequence += 1;
     this.postDeletionSubmissionSequence += 1;
@@ -427,9 +460,8 @@ export struct ThreadDetailPage {
           .height(1)
           .opacity(0)
 
-        // P-16's deletion eligibility read is isolated from both the visible
-        // topic and the reply composer.  It performs a GET-only form check;
-        // this phase never submits, edits, clears, or deletes a post.
+        // Isolated deletion form: GET eligibility, one confirmed POST, then
+        // inspect its actual redirect without replacing an in-flight request.
         Web({ src: '', controller: this.postDeletionWebController })
           .javaScriptAccess(true)
           .domStorageAccess(true)
@@ -437,8 +469,8 @@ export struct ThreadDetailPage {
             this.onPostDeletionControllerAttached();
           })
           .onPageEnd((event) => {
-            if (this.isPostDeletionSubmitting && this.isPostDeletionVerificationLoading) {
-              this.readPostDeletionVerificationFromWeb();
+            if (this.isPostDeletionSubmitting) {
+              this.onPostDeletionResultPageEnd();
               return;
             }
             if (this.isCurrentPostDeletionPreflightRequest(event.url)) {
@@ -447,8 +479,7 @@ export struct ThreadDetailPage {
           })
           .onErrorReceive((event) => {
             const requestUrl: string = event.request.getRequestUrl();
-            if (event.request.isMainFrame() && this.isPostDeletionSubmitting &&
-              this.isPostDeletionVerificationLoading) {
+            if (event.request.isMainFrame() && this.isPostDeletionSubmitting) {
               this.failPostDeletionSubmission('无法读取服务器删除结果，请稍后核对该帖子。');
               return;
             }
@@ -623,7 +654,10 @@ export struct ThreadDetailPage {
                 ListItem() {
                   this.buildPost(post);
                 }
-              }, (post: ThreadPost) => post.id)
+                .onSizeChange(() => {
+                  this.onPostLayoutSizeChanged(post.id);
+                })
+              }, (post: ThreadPost) => this.postRowVersions.key(post))
               ListItem() {
                 this.buildThreadLoadFooter();
               }
@@ -631,6 +665,11 @@ export struct ThreadDetailPage {
             .layoutWeight(1)
             .width('100%')
             .divider({ strokeWidth: 1, color: $r('app.color.border_subtle'), startMargin: 12, endMargin: 12 })
+            .onTouch((event: TouchEvent) => {
+              if (event.type === TouchType.Down) {
+                this.cancelPostLayoutAnchor();
+              }
+            })
             .onReachEnd(() => {
               this.loadNextThreadPage();
             })
@@ -1043,7 +1082,10 @@ export struct ThreadDetailPage {
     .width('100%')
     .backgroundColor($r('app.color.surface'))
     .padding({ left: 12, right: 12, top: 10, bottom: 11 })
-    .bindContextMenu(this.buildPostContextMenu(post), ResponseType.LongPress)
+    .bindContextMenu(this.buildPostContextMenu(post), ResponseType.LongPress, {
+      aboutToAppear: () => { this.isPostContextMenuVisible = true; },
+      onDisappear: () => { this.onPostContextMenuClosed(); }
+    })
     // The card owns the NG-style page-jump double tap. Interactive descendants
     // explicitly monopolize their events, so profile/floor/link/image actions
     // never bubble into the reader-level gesture.
@@ -1425,9 +1467,15 @@ export struct ThreadDetailPage {
     try {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
       const settings: FourD4yUserSettings = await FourD4yUserSettingsStore.load(context);
+      if (!this.isThreadPageAlive) {
+        return;
+      }
       this.imageLoadPolicy = settings.imageLoadPolicy;
       this.postLineSpacing = settings.postLineSpacing;
     } catch (_error) {
+      if (!this.isThreadPageAlive) {
+        return;
+      }
       this.imageLoadPolicy = FourD4yImageLoadPolicy.Automatic;
       this.postLineSpacing = 1;
     }
@@ -1777,6 +1825,12 @@ export struct ThreadDetailPage {
     // NG's quick-reply placement instead of anchoring below the title bar.
     Stack({ alignContent: Alignment.Bottom }) {
       Column({ space: 6 }) {
+        if (this.replySubmissionErrorMessage.length > 0) {
+          Text(this.replySubmissionErrorMessage)
+            .fontSize(12)
+            .fontColor($r('app.color.danger_text'))
+            .width('100%')
+        }
         if (this.isReplyPreflightLoading) {
           Row({ space: 8 }) {
             LoadingProgress()
@@ -1811,7 +1865,7 @@ export struct ThreadDetailPage {
             })
           TextArea({ placeholder: this.getQuickReplyHint(), text: this.replyDraft })
             .id(this.quickReplyInputId)
-            .defaultFocus(true)
+            .defaultFocus(!this.isPostContextMenuVisible)
             .layoutWeight(1)
             .maxLines(6)
             .fontSize(17)
@@ -2005,10 +2059,17 @@ export struct ThreadDetailPage {
 
   private scrollToPendingFloor(): void {
     const targetIndex: number = this.consumePendingPostIndex();
+    const sequence: number = this.webLoadSequence;
     if (targetIndex < 0) {
       return;
     }
+    this.armPostLayoutAnchor(targetIndex);
+    const revision: number = this.postLayoutAnchorRevision;
     setTimeout(() => {
+      if (!this.isThreadPageAlive || sequence !== this.webLoadSequence ||
+        revision !== this.postLayoutAnchorRevision) {
+        return;
+      }
       try {
         this.postListScroller.scrollToIndex(targetIndex, false, ScrollAlign.START);
       } catch (_error) {
@@ -2024,6 +2085,7 @@ export struct ThreadDetailPage {
    * the value is consumed when the List is created after loading finishes.
    */
   private prepareInitialPostListIndex(): void {
+    this.cancelPostLayoutAnchor();
     if (this.pendingFirstPostOfPage) {
       this.pendingFirstPostOfPage = false;
       this.pendingPostId = '';
@@ -2036,10 +2098,57 @@ export struct ThreadDetailPage {
       this.pendingPostId = '';
       this.pendingFloor = 0;
       this.initialPostListIndex = Math.max(0, this.posts.length - 1);
+      this.armPostLayoutAnchor(this.initialPostListIndex);
       return;
     }
     const targetIndex: number = this.consumePendingPostIndex();
     this.initialPostListIndex = targetIndex >= 0 ? targetIndex : 0;
+    this.armPostLayoutAnchor(targetIndex);
+  }
+
+  private cancelPostLayoutAnchor(): void {
+    this.postLayoutAnchorIndex = -1;
+    this.postLayoutAnchorRevision += 1;
+    this.postLayoutAnchorQueued = false;
+  }
+
+  private armPostLayoutAnchor(index: number): void {
+    this.cancelPostLayoutAnchor();
+    if (index >= 0 && index < this.posts.length) {
+      this.postLayoutAnchorIndex = index;
+    }
+  }
+
+  private onPostLayoutSizeChanged(postId: string): void {
+    const index: number = this.postLayoutAnchorIndex;
+    if (!this.isThreadPageAlive || index < 0 || this.postLayoutAnchorQueued) {
+      return;
+    }
+    const changedIndex: number = this.posts.findIndex((post: ThreadPost) => post.id === postId);
+    if (changedIndex < 0 || changedIndex > index) {
+      return;
+    }
+    const sequence: number = this.webLoadSequence;
+    const revision: number = this.postLayoutAnchorRevision;
+    this.postLayoutAnchorQueued = true;
+    // InitialIndex positions the placeholder layout only. Image expansion above
+    // an explicit destination must preserve that destination until user input.
+    // Size callbacks run inside layout: defer once, never use a timed retry loop.
+    setTimeout(() => {
+      if (revision !== this.postLayoutAnchorRevision) {
+        return;
+      }
+      this.postLayoutAnchorQueued = false;
+      if (!this.isThreadPageAlive || sequence !== this.webLoadSequence ||
+        index !== this.postLayoutAnchorIndex) {
+        return;
+      }
+      try {
+        this.postListScroller.scrollToIndex(index, false, ScrollAlign.START);
+      } catch (_error) {
+        // A detached list needs no correction. Later layout may try again.
+      }
+    }, 0);
   }
 
   private consumePendingPostIndex(): number {
@@ -2095,6 +2204,9 @@ export struct ThreadDetailPage {
   }
 
   private showLinkToast(message: string): void {
+    if (!this.isThreadPageAlive) {
+      return;
+    }
     try {
       this.getUIContext().getPromptAction().showToast({ message: message });
     } catch (_error) {
@@ -2127,6 +2239,7 @@ export struct ThreadDetailPage {
     }
     const context: common.UIAbilityContext = hostContext as common.UIAbilityContext;
     const displayName: string = createFourD4yAttachmentFileName(label);
+    const sessionGeneration: number = this.accountState.getSessionGeneration();
     this.isAttachmentPickerActive = true;
     try {
       const options: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
@@ -2134,6 +2247,9 @@ export struct ThreadDetailPage {
       options.defaultFilePathUri = 'file://docs/storage/Users/currentUser/Download/';
       const documentPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(context);
       const destinationUris: string[] = await documentPicker.save(options);
+      if (!this.isThreadPageAlive || sessionGeneration !== this.accountState.getSessionGeneration()) {
+        return;
+      }
       if (destinationUris.length !== 1 || destinationUris[0].length === 0) {
         this.showLinkToast('未选择附件保存位置');
         return;
@@ -2142,7 +2258,8 @@ export struct ThreadDetailPage {
       this.pendingAttachmentUrl = url;
       this.attachmentDestinationUri = destinationUris[0];
       this.attachmentDisplayName = displayName;
-      this.attachmentTemporaryPath = context.cacheDir + '/hipda-oh-attachment-' + sequence + '.download';
+      this.attachmentTemporaryPath = context.cacheDir + '/hipda-oh-attachment-' + Date.now() + '-' +
+        (++attachmentArtifactSequence) + '.download';
       this.startAttachmentDownloadWatchdog(sequence);
       try {
         this.threadWebController.startDownload(url);
@@ -2156,6 +2273,7 @@ export struct ThreadDetailPage {
       this.isAttachmentPickerActive = false;
     }
   }
+
 
   private ensureAttachmentDownloadDelegate(): boolean {
     if (this.isAttachmentDownloadDelegateAttached) {
@@ -2193,6 +2311,12 @@ export struct ThreadDetailPage {
       item.cancel();
       return;
     }
+    // API 24 exposes the original request even when the file endpoint redirects.
+    // A delayed callback from a timed-out request must not claim a later picker.
+    if (item.getOriginalUrl() !== this.pendingAttachmentUrl) {
+      item.cancel();
+      return;
+    }
     const mimeType: string = item.getMimeType().trim().toLowerCase();
     if (mimeType.startsWith('text/html')) {
       void this.failPendingAttachmentDownload(sequence, '附件地址返回了网页，请重新登录后再试。');
@@ -2219,6 +2343,9 @@ export struct ThreadDetailPage {
     const temporaryPath: string = this.attachmentTemporaryPath;
     const destinationUri: string = this.attachmentDestinationUri;
     const displayName: string = this.attachmentDisplayName;
+    // Claim the terminal callback before awaiting file I/O. Duplicate finish or
+    // failure callbacks must not copy, truncate, or reset this operation twice.
+    this.attachmentDownloadGuid = '';
     try {
       const destinationFile: fileIo.File = await fileIo.open(destinationUri,
         fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
@@ -2232,7 +2359,6 @@ export struct ThreadDetailPage {
       this.showLinkToast('附件已保存：' + displayName);
     } catch (_error) {
       await this.removeFileQuietly(temporaryPath);
-      await this.removeFileQuietly(destinationUri);
       this.resetAttachmentDownloadState();
       this.showLinkToast('附件已下载，但写入所选位置失败。');
     }
@@ -2268,18 +2394,16 @@ export struct ThreadDetailPage {
     if (sequence !== this.attachmentDownloadSequence || this.pendingAttachmentUrl.length === 0) {
       return;
     }
-    const destinationUri: string = this.attachmentDestinationUri;
     this.resetAttachmentDownloadState();
-    await this.removeFileQuietly(destinationUri);
+    // A Picker URI is user-owned. It is not safe to infer that it was created
+    // by this download or delete it when the transfer never started.
     this.showLinkToast(message);
   }
 
   private async failActiveAttachmentDownload(message: string): Promise<void> {
     const temporaryPath: string = this.attachmentTemporaryPath;
-    const destinationUri: string = this.attachmentDestinationUri;
     this.resetAttachmentDownloadState();
     await this.removeFileQuietly(temporaryPath);
-    await this.removeFileQuietly(destinationUri);
     this.showLinkToast(message);
   }
 
@@ -2348,7 +2472,7 @@ export struct ThreadDetailPage {
   }
 
   private loadNextThreadPage(): void {
-    if (this.isLoading || this.isLoadingMore || this.isAppendingThreadPage ||
+    if (this.isLoading || this.isRefreshing || this.isLoadingMore || this.isAppendingThreadPage ||
       this.currentPage >= this.lastPage) {
       return;
     }
@@ -2368,7 +2492,7 @@ export struct ThreadDetailPage {
     } catch (_error) {
       this.pendingRefreshScrollOffset = 0;
     }
-    this.loadPage(this.currentPage, false, true);
+    this.loadPage(this.firstRenderedPage, false, true);
   }
 
   private loadPage(page: number, append: boolean = false, preserveVisibleContent: boolean = false): void {
@@ -2377,10 +2501,11 @@ export struct ThreadDetailPage {
       return;
     }
     this.isAppendingThreadPage = append;
+    this.cancelPostLayoutAnchor();
     if (append) {
       this.isLoadingMore = true;
       this.loadMoreError = '';
-    } else if (preserveVisibleContent && this.posts.length > 0 && page === this.currentPage) {
+    } else if (preserveVisibleContent && this.posts.length > 0 && page === this.firstRenderedPage) {
       this.isRefreshing = true;
       this.loadError = '';
       this.loadMoreError = '';
@@ -2391,7 +2516,7 @@ export struct ThreadDetailPage {
       this.initialPostListIndex = 0;
       this.loadError = '';
       this.loadMoreError = '';
-      this.posts = [];
+      this.posts = this.postRowVersions.track([]);
       this.postImageSizes = [];
       this.selectablePostId = '';
     }
@@ -2446,14 +2571,28 @@ export struct ThreadDetailPage {
     this.quickReplyTargetAuthorName = post === undefined ? '' : post.authorName;
     this.replyDraft = '';
     this.replyPreflightMessage = '';
+    this.replySubmissionErrorMessage = '';
     this.quickReplySendLongPressed = false;
     this.isReplyComposerVisible = true;
-    this.setQuickReplyKeyboardAvoidMode();
+    if (!this.isPostContextMenuVisible) {
+      this.setQuickReplyKeyboardAvoidMode();
+    }
     this.prepareReplyForm();
     this.requestQuickReplyFocus();
   }
 
   private closeQuickReply(discardDraft: boolean): void {
+    // A canceled GET preflight must not dispatch a POST when it settles later.
+    // An already dispatched POST remains tracked until its result is known.
+    if (!this.isReplySubmitting) {
+      this.replyPreflightSequence += 1;
+      this.replySubmissionSequence += 1;
+      this.clearReplyPreflightWatchdog();
+      this.isReplyPreflightLoading = false;
+      this.isReplyFormReady = false;
+      this.replyWebOperation = ReplyWebOperation.Preflight;
+      this.pendingReplyDraft = '';
+    }
     this.isReplyComposerVisible = false;
     if (discardDraft) {
       this.replyDraft = '';
@@ -2534,9 +2673,22 @@ export struct ThreadDetailPage {
     this.hasAdjustedQuickReplyKeyboardAvoidMode = false;
   }
 
+  private onPostContextMenuClosed(): void {
+    this.isPostContextMenuVisible = false;
+    if (!this.isThreadPageAlive || !this.isReplyComposerVisible) {
+      return;
+    }
+    // The menu owns a child window until its exit animation has completed.
+    // Hand keyboard avoidance/focus back to the reader only after that point.
+    this.setQuickReplyKeyboardAvoidMode();
+    this.requestQuickReplyFocus();
+  }
+
   private requestQuickReplyFocus(): void {
+    const sequence: number = this.replyPreflightSequence;
     setTimeout(() => {
-      if (!this.isReplyComposerVisible) {
+      if (!this.isThreadPageAlive || !this.isReplyComposerVisible || this.isPostContextMenuVisible ||
+        sequence !== this.replyPreflightSequence) {
         return;
       }
       try {
@@ -2710,10 +2862,12 @@ export struct ThreadDetailPage {
 
   /** A destructive write is always a separate native confirmation. */
   private requestPostDeletionConfirmation(): void {
-    if (!this.postDeletionFormReady || this.postDeletionConfirmationPending ||
+    if (!this.isThreadPageAlive || !this.postDeletionFormReady || this.postDeletionConfirmationPending ||
       this.isPostDeletionSubmitting || this.postDeletionPreflightPostId.length === 0) {
       return;
     }
+    const confirmationSequence: number = this.postDeletionPreflightSequence;
+    const confirmationPostId: string = this.postDeletionPreflightPostId;
     this.postDeletionConfirmationPending = true;
     this.getUIContext().getPromptAction().showDialog({
       message: '确认删除这条自己发表的内容吗？此操作不可恢复。仅在服务器已确认可真实删除时才会提交。',
@@ -2722,6 +2876,10 @@ export struct ThreadDetailPage {
         { text: '删除', color: $r('app.color.danger_text') }
       ]
     }).then((result) => {
+      if (!this.isThreadPageAlive || confirmationSequence !== this.postDeletionPreflightSequence ||
+        confirmationPostId !== this.postDeletionPreflightPostId) {
+        return;
+      }
       this.postDeletionConfirmationPending = false;
       if (result.index === 1) {
         this.beginPostDeletionSubmission();
@@ -2730,6 +2888,10 @@ export struct ThreadDetailPage {
       this.postDeletionFormReady = false;
       this.postDeletionMessage = '已取消删除。';
     }).catch(() => {
+      if (!this.isThreadPageAlive || confirmationSequence !== this.postDeletionPreflightSequence ||
+        confirmationPostId !== this.postDeletionPreflightPostId) {
+        return;
+      }
       this.postDeletionConfirmationPending = false;
       this.postDeletionFormReady = false;
       this.postDeletionMessage = '已取消删除。';
@@ -2743,6 +2905,9 @@ export struct ThreadDetailPage {
    * explicitly confirmed the native destructive-action dialog.
    */
   private async beginPostDeletionSubmission(): Promise<void> {
+    if (!this.isThreadPageAlive) {
+      return;
+    }
     const threadId: string = this.route.threadId;
     const postId: string = this.postDeletionPreflightPostId;
     const targetPost: ThreadPost | undefined = this.posts.find((post: ThreadPost) => post.id === postId);
@@ -2780,13 +2945,11 @@ export struct ThreadDetailPage {
           '当前删除表单已变化，未提交删除。');
         return;
       }
-      this.schedulePostDeletionVerification(submissionSequence, 900);
+      // onPageEnd reads the POST's result. A timer-driven loadUrl here can
+      // abort a slow POST and discards the forum redirect after topic deletion.
     } catch (_error) {
       // ArkWeb can begin the form navigation before returning JS's result.
-      // Do not retry the write; one server reread determines the outcome.
-      if (this.isPostDeletionSubmitting && submissionSequence === this.postDeletionSubmissionSequence) {
-        this.schedulePostDeletionVerification(submissionSequence, 1200);
-      }
+      // Keep waiting for onPageEnd/the watchdog; never retry the write.
     }
   }
 
@@ -2805,6 +2968,14 @@ export struct ThreadDetailPage {
     }, this.webLoadTimeoutMillis);
   }
 
+  private onPostDeletionResultPageEnd(): void {
+    if (!this.isThreadPageAlive || !this.isPostDeletionSubmitting) {
+      return;
+    }
+    this.isPostDeletionVerificationLoading = true;
+    void this.readPostDeletionVerificationFromWeb();
+  }
+
   private schedulePostDeletionVerification(submissionSequence: number, delayMillis: number): void {
     if (!this.isPostDeletionSubmitting || submissionSequence !== this.postDeletionSubmissionSequence) {
       return;
@@ -2821,14 +2992,9 @@ export struct ThreadDetailPage {
         return;
       }
       this.isPostDeletionVerificationLoading = true;
-      const verificationUrl: string = FourD4ySession.forumRoot + 'viewthread.php?tid=' + this.route.threadId +
-        '&page=' + this.currentPage + '&oh_delete_verify=' + submissionSequence +
-        '&oh_delete_verify_try=' + this.postDeletionVerificationAttempt;
-      try {
-        this.postDeletionWebController.loadUrl(verificationUrl);
-      } catch (_error) {
-        this.failPostDeletionSubmission('无法读取服务器删除结果，请稍后核对。');
-      }
+      // Reinspect a possible delayed server redirect; do not navigate away
+      // from the submission response and do not issue a second write.
+      void this.readPostDeletionVerificationFromWeb();
     }, delayMillis);
   }
 
@@ -2890,6 +3056,8 @@ export struct ThreadDetailPage {
     this.postDeletionMessage = '服务器已确认删除。';
     this.showLinkToast(this.postDeletionMessage);
     if (this.postDeletionTargetWasFirstPost) {
+      this.threadMutationState.notifyDeleted(this.route.threadId, this.route.forumId,
+        this.accountState.getSessionGeneration());
       this.pathStack.pop();
       return;
     }
@@ -2952,6 +3120,9 @@ export struct ThreadDetailPage {
    * from a different Discuz deployment.
    */
   private prepareReplyForm(operation: ReplyWebOperation = ReplyWebOperation.Preflight): void {
+    if (!this.isThreadPageAlive || !this.isReplyComposerVisible) {
+      return;
+    }
     this.replyPreflightSequence += 1;
     const sequence: number = this.replyPreflightSequence;
     this.replyWebOperation = operation;
@@ -2978,9 +3149,8 @@ export struct ThreadDetailPage {
   }
 
   private isCurrentReplyPreflightRequest(url: string): boolean {
-    return isCurrentFourD4yWebRequest(url, 'post.php', this.replyPreflightSequence)
-      || (url.indexOf('post.php?action=reply') >= 0 &&
-        url.indexOf('oh_reply_prepare=' + this.replyPreflightSequence) >= 0);
+    return this.isThreadPageAlive && isCurrentFourD4yPostPreflightUrl(url, 'reply', this.route.threadId,
+      '', 'oh_reply_prepare', this.replyPreflightSequence);
   }
 
   private handleCompletedReplyWebLoad(url: string): void {
@@ -3058,6 +3228,7 @@ export struct ThreadDetailPage {
       return;
     }
     this.replySubmissionSequence += 1;
+    this.replySubmissionErrorMessage = '';
     this.pendingReplyDraft = draft;
     this.isReplyFormReady = false;
     this.replyPreflightMessage = '正在重新获取一次性回复表单…';
@@ -3070,7 +3241,8 @@ export struct ThreadDetailPage {
   }
 
   private async beginReplySubmission(preflightSequence: number): Promise<void> {
-    if (this.replyWebOperation !== ReplyWebOperation.Submit ||
+    if (!this.isThreadPageAlive || !this.isReplyComposerVisible ||
+      this.replyWebOperation !== ReplyWebOperation.Submit ||
       preflightSequence !== this.replyPreflightSequence) {
       return;
     }
@@ -3143,6 +3315,10 @@ export struct ThreadDetailPage {
         this.failReplySubmission('4D4Y 登录状态已失效，回复未发表。');
         return;
       }
+      if (payload.errorMessage.length > 0) {
+        this.recoverRejectedReply(payload.errorMessage);
+        return;
+      }
       this.failReplySubmission(payload.errorMessage.length > 0 ? payload.errorMessage :
         '4D4Y 未确认回复成功，内容没有被当作已发表处理。');
     } catch (_error) {
@@ -3161,21 +3337,21 @@ export struct ThreadDetailPage {
     this.replyPreflightMessage = message;
   }
 
+  /** A definite server rejection unlocks editing, never an automatic repost. */
+  private recoverRejectedReply(message: string): void {
+    this.clearReplyPreflightWatchdog();
+    this.isReplySubmitting = false;
+    this.pendingReplyDraft = '';
+    this.replySubmissionErrorMessage = message;
+    this.prepareReplyForm(ReplyWebOperation.Preflight);
+  }
+
   private getReplySubmissionScript(draft: string, preserveQuoteTemplate: boolean): string {
     const safeDraft: string = JSON.stringify(draft);
     const safePreserveQuoteTemplate: string = JSON.stringify(preserveQuoteTemplate);
     return [
       '(() => {',
-      '  const asUrl = (value) => { try { return new URL(value || location.href, location.href); } catch (_) { return new URL(location.href); } };',
-      '  const forms = Array.from(document.forms || []);',
-      '  const form = forms.find((candidate) => {',
-      '    const action = asUrl(candidate.getAttribute("action") || location.href);',
-      '    return action.pathname.indexOf("post.php") >= 0 && action.searchParams.get("action") === "reply";',
-      '  }) || forms.find((candidate) => candidate.querySelector("textarea[name=message]") !== null);',
-      '  const message = form ? form.querySelector("textarea[name=message]") : null;',
-      '  if (!form || !message) { throw new Error("reply-form-not-ready"); }',
-      '  const actionUrl = asUrl(form.getAttribute("action") || location.href);',
-      '  if (actionUrl.pathname.indexOf("post.php") < 0 || actionUrl.searchParams.get("action") !== "reply") throw new Error("reply-action-changed");',
+      buildFourD4yPostFormBoundaryScript('reply', this.route.threadId, '', 'oh_reply_prepare', this.replyPreflightSequence),
       // NG and the live Discuz form both use the URL-level signal. A body-only
       // submit button value is not sufficient on every 4D4Y reply template.
       '  actionUrl.searchParams.set("replysubmit", "yes");',
@@ -3188,11 +3364,11 @@ export struct ThreadDetailPage {
       '  const outgoing = document.createElement("form"); outgoing.method = "post"; outgoing.action = actionUrl.toString(); outgoing.style.display = "none";',
       '  const appendField = (name, value) => { const field = document.createElement("input"); field.type = "hidden"; field.name = name; field.value = value; outgoing.appendChild(field); };',
       '  const copiedNames = [];',
-      '  Array.from(new FormData(form).entries()).forEach((entry) => { const name = entry[0]; const value = entry[1]; if (typeof value !== "string" || name === "message" || name === "replysubmit") return; appendField(name, value); copiedNames.push(name); });',
+      '  Array.from(new FormData(form).entries()).forEach((entry) => { const name = entry[0]; const value = entry[1]; if (typeof value !== "string" || name === "message" || name === "replysubmit" || /^(?:attachnew|attachdel)(?:\\[|$)/i.test(name) || /^Filedata$/i.test(name)) return; appendField(name, value); copiedNames.push(name); });',
       '  appendField("message", message.value); appendField("replysubmit", "yes");',
       '  if (copiedNames.indexOf("wysiwyg") < 0) appendField("wysiwyg", "0");',
       '  if (copiedNames.indexOf("usesig") < 0) appendField("usesig", "1");',
-      '  document.body.appendChild(outgoing); outgoing.submit(); return "submitted";',
+      '  document.body.appendChild(outgoing); window.__hipdaPostSubmitted = true; HTMLFormElement.prototype.submit.call(outgoing); return "submitted";',
       '})()'
     ].join('\n');
   }
@@ -3205,7 +3381,7 @@ export struct ThreadDetailPage {
       '  const loginRequired = !!document.querySelector("input[name=username], input[name=password]");',
       '  const alert = document.querySelector(".alert_info, .alert_error, #messagetext");',
       '  const errorMessage = alert ? (alert.innerText || alert.textContent || "").trim().slice(0, 240) : "";',
-      '  const isThreadResult = url.pathname.indexOf("viewthread.php") >= 0 || url.pathname.indexOf("redirect.php") >= 0;',
+      '  const isThreadResult = url.origin === "https://www.4d4y.com" && url.searchParams.getAll("tid").length === 1 && (url.pathname === "/forum/viewthread.php" || url.pathname === "/forum/redirect.php");',
       '  const succeeded = isThreadResult && url.searchParams.get("tid") === ' + safeThreadId + ';',
       '  return JSON.stringify({ threadId: ' + safeThreadId + ', submissionSequence: ' +
         submissionSequence + ', succeeded: succeeded, loginRequired: loginRequired, errorMessage: errorMessage });',
@@ -3535,18 +3711,19 @@ export struct ThreadDetailPage {
     return [
       '(() => {',
       '  const threadId = ' + safeThreadId + ';',
+      this.getVoteBoundaryScript(),
       '  const text = (node) => node ? (node.innerText || node.textContent || "").replace(/\\s+/g, " ").trim() : "";',
       '  const finish = (accessState, hasChallenge, formFound, formMethod, actionPath, hasFormhashField, hasPollSubmitAction, maxSelections, isMultipleChoice, optionIds, errorMessage) => JSON.stringify({ threadId: threadId, formSequence: ' + formSequence + ', accessState: accessState, hasChallenge: hasChallenge, formFound: formFound, formMethod: formMethod, actionPath: actionPath, hasFormhashField: hasFormhashField, hasPollSubmitAction: hasPollSubmitAction, maxSelections: maxSelections, isMultipleChoice: isMultipleChoice, optionIds: optionIds, errorMessage: (errorMessage || "").slice(0, 180) });',
       '  try {',
       '    const pageUrl = new URL(location.href);',
-      '    if (pageUrl.pathname.indexOf("/forum/viewthread.php") < 0 || pageUrl.searchParams.get("tid") !== threadId) return finish("available", false, false, "", "", false, false, 1, false, [], "当前页面不是目标主题。");',
+      '    if (!isVotePage(pageUrl)) return finish("available", false, false, "", "", false, false, 1, false, [], "当前页面不是目标主题。");',
       '    const loginForm = document.querySelector("#loginform, form[name=login], input[name=username], input[name=password]");',
       '    if (loginForm) return finish("loginRequired", false, false, "", "", false, false, 1, false, [], "登录状态已失效。");',
       '    const html = document.documentElement.innerHTML;',
       '    const challenge = html.indexOf("challenge-platform") >= 0 || html.indexOf("cf-chl-") >= 0 || !!document.querySelector(".cf-turnstile, #challenge-form, [data-sitekey]");',
       '    const form = document.querySelector("form#poll");',
       '    const action = (() => { try { return form ? new URL(form.getAttribute("action") || location.href, location.href) : null; } catch (_) { return null; } })();',
-      '    const actionPath = action && action.pathname === "/forum/misc.php" && action.searchParams.get("action") === "votepoll" && action.searchParams.has("pollsubmit") ? "/forum/misc.php?action=votepoll&pollsubmit=yes" : "";',
+      '    const actionPath = isVoteAction(action) ? "/forum/misc.php?action=votepoll&pollsubmit=yes" : "";',
       '    const options = form ? Array.from(form.querySelectorAll("td.selector input[name=\\\"pollanswers[]\\\"], input[name=\\\"pollanswers[]\\\"]")) : [];',
       '    const optionIds = []; const seen = new Set();',
       '    options.forEach((input) => { const value = (input.getAttribute("value") || "").trim(); if (/^\\d{1,20}$/.test(value) && !seen.has(value)) { seen.add(value); optionIds.push(value); } });',
@@ -3556,7 +3733,7 @@ export struct ThreadDetailPage {
       '    const isMultipleChoice = maxSelections > 1 || options.some((input) => (input.getAttribute("type") || "").toLowerCase() === "checkbox");',
       '    const submit = form ? form.querySelector("input[type=submit], button[type=submit], input[name*=pollsubmit], button[name*=pollsubmit]") : null;',
       '    const alert = document.querySelector(".alert_info, .alert_error, #messagetext, .message");',
-      '    return finish("available", challenge, !!form, form ? (form.method || "get").toLowerCase() : "", actionPath, !!(form && form.querySelector("input[name=formhash]")), !!submit && actionPath.length > 0, maxSelections, isMultipleChoice, optionIds, text(alert));',
+      '    return finish("available", challenge, !!form, form ? (form.method || "get").toLowerCase() : "", actionPath, !!(form && form.querySelector("input[name=formhash]")), isVoteSubmitControl(submit) && actionPath.length > 0, maxSelections, isMultipleChoice, optionIds, text(alert));',
       '  } catch (_) { return finish("available", false, false, "", "", false, false, 1, false, [], "读取投票表单失败。"); }',
       '})()'
     ].join('\n');
@@ -3568,16 +3745,20 @@ export struct ThreadDetailPage {
     return [
       '(() => {',
       '  const threadId = ' + safeThreadId + '; const wanted = new Set(' + safeOptionIds + ');',
+      this.getVoteBoundaryScript(),
       '  const finish = (started, errorMessage) => JSON.stringify({ threadId: threadId, submissionSequence: ' + submissionSequence + ', started: started, errorMessage: (errorMessage || "").slice(0, 180) });',
       '  try {',
-      '    const pageUrl = new URL(location.href); if (pageUrl.pathname.indexOf("/forum/viewthread.php") < 0 || pageUrl.searchParams.get("tid") !== threadId) return finish(false, "当前页面不是目标主题。");',
+      '    const pageUrl = new URL(location.href); if (!isVotePage(pageUrl)) return finish(false, "当前页面不是目标主题。");',
       '    const form = document.querySelector("form#poll"); if (!form || (form.method || "get").toLowerCase() !== "post" || !form.querySelector("input[name=formhash]")) return finish(false, "投票表单已变化。");',
-      '    const action = new URL(form.getAttribute("action") || location.href, location.href); if (action.pathname !== "/forum/misc.php" || action.searchParams.get("action") !== "votepoll" || !action.searchParams.has("pollsubmit")) return finish(false, "投票地址已变化。");',
+      '    const action = new URL(form.getAttribute("action") || location.href, location.href); if (!isVoteAction(action)) return finish(false, "投票地址已变化。");',
       '    const inputs = Array.from(form.querySelectorAll("td.selector input[name=\\\"pollanswers[]\\\"], input[name=\\\"pollanswers[]\\\"]"));',
       '    const available = new Set(inputs.map((input) => (input.getAttribute("value") || "").trim())); if (wanted.size < 1 || Array.from(wanted).some((value) => !available.has(value))) return finish(false, "投票选项已变化。");',
-      '    inputs.forEach((input) => { input.checked = wanted.has((input.getAttribute("value") || "").trim()); });',
+      '    const submit = form.querySelector("input[type=submit], button[type=submit], input[name*=pollsubmit], button[name*=pollsubmit]"); if (!isVoteSubmitControl(submit)) return finish(false, "投票提交控件已变化。");',
+      '    // Discuz enables pollsubmit from option click handlers, not checked assignment.',
+      '    inputs.filter((input) => input.checked && !wanted.has((input.getAttribute("value") || "").trim()) && input.type === "checkbox").forEach((input) => input.click());',
+      '    inputs.filter((input) => wanted.has((input.getAttribute("value") || "").trim()) && !input.checked).forEach((input) => input.click());',
       '    const selected = inputs.filter((input) => input.checked); if (selected.length !== wanted.size) return finish(false, "投票选项校验失败。");',
-      '    const submit = form.querySelector("input[type=submit], button[type=submit], input[name*=pollsubmit], button[name*=pollsubmit]"); if (!submit) return finish(false, "当前投票表单没有提交按钮。");',
+      '    if (submit.disabled || !isVoteSubmitControl(submit)) return finish(false, "当前网页仍未允许提交投票。");',
       '    if (typeof form.requestSubmit === "function") { form.requestSubmit(submit); } else { form.submit(); } return finish(true, "");',
       '  } catch (_) { return finish(false, "投票表单未能启动提交。"); }',
       '})()'
@@ -3589,18 +3770,32 @@ export struct ThreadDetailPage {
     return [
       '(() => {',
       '  const threadId = ' + safeThreadId + ';',
+      this.getVoteBoundaryScript(),
       '  const text = (node) => node ? (node.innerText || node.textContent || "").replace(/\\s+/g, " ").trim() : "";',
       '  const finish = (accessState, hasChallenge, pollFound, voteFormAvailable, resultRowCount, errorMessage) => JSON.stringify({ threadId: threadId, submissionSequence: ' + submissionSequence + ', accessState: accessState, hasChallenge: hasChallenge, pollFound: pollFound, voteFormAvailable: voteFormAvailable, resultRowCount: resultRowCount, errorMessage: (errorMessage || "").slice(0, 180) });',
       '  try {',
-      '    const pageUrl = new URL(location.href); if (pageUrl.pathname.indexOf("/forum/viewthread.php") < 0 || pageUrl.searchParams.get("tid") !== threadId) return finish("available", false, false, false, 0, "当前页面不是目标主题。");',
+      '    const pageUrl = new URL(location.href); if (!isVotePage(pageUrl)) return finish("available", false, false, false, 0, "当前页面不是目标主题。");',
       '    const loginForm = document.querySelector("#loginform, form[name=login], input[name=username], input[name=password]"); if (loginForm) return finish("loginRequired", false, false, false, 0, "登录状态已失效。");',
       '    const html = document.documentElement.innerHTML; const challenge = html.indexOf("challenge-platform") >= 0 || html.indexOf("cf-chl-") >= 0 || !!document.querySelector(".cf-turnstile, #challenge-form, [data-sitekey]");',
       '    const form = document.querySelector("form#poll"); const action = (() => { try { return form ? new URL(form.getAttribute("action") || location.href, location.href) : null; } catch (_) { return null; } })();',
-      '    const voteFormAvailable = !!form && (form.method || "get").toLowerCase() === "post" && !!form.querySelector("input[name=formhash]") && !!action && action.pathname === "/forum/misc.php" && action.searchParams.get("action") === "votepoll" && action.searchParams.has("pollsubmit") && form.querySelectorAll("input[name=\\\"pollanswers[]\\\"]").length >= 2;',
+      '    const hasOptions = !!form && form.querySelectorAll("input[name=\\\"pollanswers[]\\\"]").length > 0;',
+      '    const voteFormAvailable = hasOptions && (form.method || "get").toLowerCase() === "post" && !!form.querySelector("input[name=formhash]") && isVoteAction(action);',
+      '    if (hasOptions && !voteFormAvailable) return finish("available", challenge, false, false, 0, "投票表单结构已变化，无法确认结果。");',
       '    const pollRoot = form || document.querySelector(".poll, .pollinfo, .pollchart"); const resultRowCount = pollRoot ? pollRoot.querySelectorAll("div.pollchart tr, .pollchart tr, tr").length : 0;',
       '    const alert = document.querySelector(".alert_info, .alert_error, #messagetext, .message"); return finish("available", challenge, !!pollRoot, voteFormAvailable, Math.min(30, resultRowCount), text(alert));',
       '  } catch (_) { return finish("available", false, false, false, 0, "读取服务器投票结果失败。"); }',
       '})()'
+    ].join('\n');
+  }
+
+  /** Same destination contract for preflight, submit and server-result reread. */
+  private getVoteBoundaryScript(): string {
+    return [
+      '  const isVoteOrigin = (url) => !!url && url.origin === "https://www.4d4y.com" && !url.username && !url.password;',
+      '  const isVoteThread = (url) => url.searchParams.getAll("tid").length === 1 && url.searchParams.get("tid") === threadId;',
+      '  const isVotePage = (url) => isVoteOrigin(url) && url.pathname === "/forum/viewthread.php" && isVoteThread(url);',
+      '  const isVoteAction = (url) => isVoteOrigin(url) && url.pathname === "/forum/misc.php" && isVoteThread(url) && url.searchParams.getAll("action").length === 1 && url.searchParams.get("action") === "votepoll" && url.searchParams.getAll("pollsubmit").length === 1;',
+      '  const isVoteSubmitControl = (submit) => { if (!submit) return false; const action = submit.getAttribute("formaction"); const method = submit.getAttribute("formmethod"); return (action === null || isVoteAction(new URL(action, location.href))) && (method === null || method.toLowerCase() === "post"); };'
     ].join('\n');
   }
 
@@ -3624,8 +3819,7 @@ export struct ThreadDetailPage {
       const payload: ThreadWebPayload | null = parseThreadWebPayload(rawResult);
       if (payload === null) {
         if (expectedSequence === this.webLoadSequence) {
-          shouldFinish = true;
-          this.loadError = '4D4Y 页面已加载，但无法识别页面数据；请刷新后重试。';
+          this.failThreadLoad(expectedSequence, '4D4Y 页面已加载，但无法识别页面数据；请刷新后重试。');
         }
         return;
       }
@@ -3651,7 +3845,8 @@ export struct ThreadDetailPage {
         return;
       }
       this.needsWebVerification = false;
-      this.posts = isAppendingRequest ? appendFourD4yThreadPosts(this.posts, payload.posts) : payload.posts;
+      this.posts = this.postRowVersions.track(isAppendingRequest ?
+        appendFourD4yThreadPosts(this.posts, payload.posts) : payload.posts);
       this.captureThreadAuthor(payload.posts);
       if (!isAppendingRequest || payload.currentPage === 1) {
         this.poll = payload.currentPage === 1 ? payload.poll : undefined;
@@ -3663,6 +3858,9 @@ export struct ThreadDetailPage {
         this.pollActionMessage = '';
       }
       this.currentPage = Math.max(payload.currentPage, 1);
+      if (!isAppendingRequest) {
+        this.firstRenderedPage = this.currentPage;
+      }
       this.lastPage = this.authorOnlyUserId.length > 0 ?
         Math.max(this.currentPage, payload.lastPage) :
         Math.max(this.currentPage, payload.lastPage, this.estimateLastPage());
@@ -3702,9 +3900,9 @@ export struct ThreadDetailPage {
       if (expectedSequence !== this.webLoadSequence || this.isThreadLoadTerminal(expectedSequence)) {
         return;
       }
-      shouldFinish = true;
+      shouldFinish = false;
       console.error('Failed to read HiPDA thread from ArkWeb.');
-      this.loadError = '暂时无法读取帖子，请检查网络后重试。';
+      this.failThreadLoad(expectedSequence, '暂时无法读取帖子，请检查网络后重试。');
     } finally {
       if (shouldFinish && expectedSequence === this.webLoadSequence) {
         this.finishThreadLoad(expectedSequence);
@@ -3713,6 +3911,9 @@ export struct ThreadDetailPage {
     if (resolvedAuthorToActivate.length > 0 && expectedSequence === this.webLoadSequence) {
       this.authorOnlyUserId = resolvedAuthorToActivate;
       setTimeout(() => {
+        if (!this.isThreadPageAlive || expectedSequence !== this.webLoadSequence) {
+          return;
+        }
         this.loadPage(1);
       }, 0);
     }
@@ -3725,7 +3926,7 @@ export struct ThreadDetailPage {
    */
   private async probeFavoriteOperation(threadLoadSequence: number): Promise<void> {
     const threadId: string = this.route.threadId;
-    if (!this.isLoggedIn || !/^\d+$/.test(threadId) || this.isFavoriteSubmitting) {
+    if (!this.isThreadPageAlive || !this.isLoggedIn || !/^\d+$/.test(threadId) || this.isFavoriteSubmitting) {
       return;
     }
     const operationSequence: number = this.favoriteOperationSequence + 1;
@@ -3734,12 +3935,20 @@ export struct ThreadDetailPage {
     this.favoriteActionLabel = '';
     this.favoriteActionMessage = '正在确认服务器收藏状态…';
     this.isFavoriteOperationLoading = true;
+    const sessionGeneration: number = this.accountState.getSessionGeneration();
     try {
+      await bindFourD4yCollectionCache(this.getUIContext().getHostContext() as common.Context,
+        this.threadWebController, this.favoriteState.cache, 'favorites', () => this.isThreadPageAlive &&
+          threadLoadSequence === this.webLoadSequence && operationSequence === this.favoriteOperationSequence &&
+          sessionGeneration === this.accountState.getSessionGeneration());
+      if (!this.isThreadPageAlive || threadLoadSequence !== this.webLoadSequence ||
+        operationSequence !== this.favoriteOperationSequence || sessionGeneration !== this.accountState.getSessionGeneration()) return;
+      this.isFavorite = this.favoriteState.isFavorite(threadId);
       const rawResult: string = await this.threadWebController.runJavaScript(
         this.getFavoriteOperationProbeScript(threadId, operationSequence)
       );
-      if (threadLoadSequence !== this.webLoadSequence || operationSequence !== this.favoriteOperationSequence ||
-        threadId !== this.route.threadId) {
+      if (!this.isThreadPageAlive || threadLoadSequence !== this.webLoadSequence || operationSequence !== this.favoriteOperationSequence ||
+        sessionGeneration !== this.accountState.getSessionGeneration() || threadId !== this.route.threadId) {
         return;
       }
       const payload: FourD4yFavoriteOperationPayload | null = parseFourD4yFavoriteOperationPayload(rawResult);
@@ -3752,24 +3961,18 @@ export struct ThreadDetailPage {
         this.favoriteActionMessage = '4D4Y 登录状态已失效，暂时不能收藏。';
         return;
       }
-      if (isAllowedFourD4yFavoriteOperationUrl(payload.actionUrl, threadId)) {
-        this.favoriteOperationUrl = payload.actionUrl;
-        // The server advertises the next operation. A remove endpoint is the
-        // authoritative indication that this topic is already favorited.
-        this.isFavorite = /(?:[?&])action=remove(?:&|$)/.test(payload.actionUrl);
-        this.favoriteActionLabel = payload.actionLabel;
-        this.favoriteActionMessage = '';
+      if (payload.hasChallenge) {
+        this.favoriteActionMessage = '请先完成 4D4Y 安全验证后再收藏。';
         return;
       }
-      // Some 4D4Y page variants omit the visible favorite anchor even though
-      // they have already confirmed the current signed-in topic document.
-      // NG uses this documented Discuz action shape; use it only as an add
-      // fallback, never to infer a removal action or a favorite result.
-      const fallbackAddUrl: string = buildFourD4yFavoriteAddUrl(threadId);
-      if (!payload.hasChallenge && isAllowedFourD4yFavoriteOperationUrl(fallbackAddUrl, threadId)) {
-        this.favoriteOperationUrl = fallbackAddUrl;
-        this.isFavorite = false;
-        this.favoriteActionLabel = '收藏';
+      // A topic's add anchor is not proof of absence: 4D4Y renders it even for
+      // existing favorites. Preserve the server-list mirror, as NG does.
+      if (isAllowedFourD4yFavoriteOperationUrl(payload.actionUrl, threadId) ||
+        payload.errorMessage.length === 0) {
+        this.isFavorite = this.isFavorite || this.favoriteState.isFavorite(threadId) ||
+          /(?:[?&])action=remove(?:&|$)/.test(payload.actionUrl);
+        this.favoriteOperationUrl = buildFourD4yFavoriteOperationUrl(threadId, this.isFavorite);
+        this.favoriteActionLabel = this.isFavorite ? '取消收藏' : '收藏';
         this.favoriteActionMessage = '';
         return;
       }
@@ -3781,11 +3984,13 @@ export struct ThreadDetailPage {
         this.favoriteActionMessage = '当前主题未提供可确认的收藏操作。';
       }
     } catch (_error) {
-      if (operationSequence === this.favoriteOperationSequence && threadId === this.route.threadId) {
+      if (this.isThreadPageAlive && sessionGeneration === this.accountState.getSessionGeneration() &&
+        operationSequence === this.favoriteOperationSequence && threadId === this.route.threadId) {
         this.favoriteActionMessage = '收藏状态无法确认。';
       }
     } finally {
-      if (operationSequence === this.favoriteOperationSequence && threadId === this.route.threadId) {
+      if (this.isThreadPageAlive && sessionGeneration === this.accountState.getSessionGeneration() &&
+        operationSequence === this.favoriteOperationSequence && threadId === this.route.threadId) {
         this.isFavoriteOperationLoading = false;
       }
     }
@@ -3809,7 +4014,7 @@ export struct ThreadDetailPage {
     const threadId: string = this.route.threadId;
     const operationUrl: string = this.favoriteOperationUrl;
     const isRemoving: boolean = /(?:[?&])action=remove(?:&|$)/.test(operationUrl);
-    if (!this.isLoggedIn || this.isFavoriteSubmitting ||
+    if (!this.isThreadPageAlive || !this.isLoggedIn || this.isFavoriteSubmitting ||
       !isAllowedFourD4yFavoriteOperationUrl(operationUrl, threadId)) {
       return;
     }
@@ -3860,7 +4065,7 @@ export struct ThreadDetailPage {
       return;
     }
     this.favoriteVerificationExpectedState = !this.favoriteSubmissionWasRemoval;
-    this.favoriteVerificationPage = this.favoriteSubmissionWasRemoval ? this.route.initialFavoritePage : 1;
+    this.favoriteVerificationPage = 1;
     this.favoriteVerificationAttempt = 0;
     this.scheduleFavoriteVerificationLoad(submissionSequence, 800);
   }
@@ -3886,7 +4091,8 @@ export struct ThreadDetailPage {
         return;
       }
       const verificationUrl: string = FourD4ySession.forumRoot + 'my.php?item=favorites&type=thread&mobile=no&page=' +
-        this.favoriteVerificationPage + '&oh_favorite_verify=' + submissionSequence;
+        this.favoriteVerificationPage + '&oh_favorite_verify=' + submissionSequence +
+        '&oh_verify_attempt=' + this.favoriteVerificationAttempt;
       try {
         this.favoriteVerificationWebController.loadUrl(verificationUrl);
       } catch (_error) {
@@ -3899,14 +4105,16 @@ export struct ThreadDetailPage {
     const threadId: string = this.route.threadId;
     const submissionSequence: number = this.favoriteSubmissionSequence;
     const verificationPage: number = this.favoriteVerificationPage;
-    if (!this.isFavoriteSubmitting || submissionSequence <= 0) {
+    const verificationAttempt: number = this.favoriteVerificationAttempt;
+    if (!this.isThreadPageAlive || !this.isFavoriteSubmitting || submissionSequence <= 0) {
       return;
     }
     try {
       const rawResult: string = await this.favoriteVerificationWebController.runJavaScript(
         this.getFavoriteVerificationScript(threadId, submissionSequence, verificationPage)
       );
-      if (!this.isFavoriteSubmitting || submissionSequence !== this.favoriteSubmissionSequence ||
+      if (!this.isThreadPageAlive || !this.isFavoriteSubmitting || verificationAttempt !== this.favoriteVerificationAttempt ||
+        submissionSequence !== this.favoriteSubmissionSequence ||
         threadId !== this.route.threadId || verificationPage !== this.favoriteVerificationPage) {
         return;
       }
@@ -3930,9 +4138,21 @@ export struct ThreadDetailPage {
           '服务器收藏列表未提供可确认的表单。');
         return;
       }
-      if (payload.favoritePresent !== this.favoriteVerificationExpectedState) {
+      const step: FourD4yCollectionVerificationStep = getFourD4yCollectionVerificationStep(
+        verificationPage, payload.lastPage, payload.favoritePresent, this.favoriteVerificationExpectedState);
+      if (step === 'nextPage') {
+        this.favoriteVerificationPage += 1;
+        this.scheduleFavoriteVerificationLoad(submissionSequence, 250);
+        return;
+      }
+      if (step === 'limit') {
+        this.failFavoriteSubmission('收藏列表较长，操作结果尚未完整核对；请在收藏列表中确认，勿重复提交。');
+        return;
+      }
+      if (step === 'retry') {
         this.favoriteVerificationAttempt += 1;
         if (this.favoriteVerificationAttempt < 3) {
+          this.favoriteVerificationPage = 1;
           this.scheduleFavoriteVerificationLoad(submissionSequence, 1200);
           return;
         }
@@ -3943,7 +4163,9 @@ export struct ThreadDetailPage {
       }
       this.completeFavoriteSubmission(this.favoriteVerificationExpectedState);
     } catch (_error) {
-      if (this.isFavoriteSubmitting && submissionSequence === this.favoriteSubmissionSequence) {
+      if (this.isThreadPageAlive && this.isFavoriteSubmitting &&
+        submissionSequence === this.favoriteSubmissionSequence && threadId === this.route.threadId &&
+        verificationPage === this.favoriteVerificationPage && verificationAttempt === this.favoriteVerificationAttempt) {
         this.failFavoriteSubmission('读取服务器收藏列表失败；请稍后重试。');
       }
     }
@@ -3954,6 +4176,8 @@ export struct ThreadDetailPage {
     this.isFavoriteSubmitting = false;
     this.favoriteSubmissionWasRemoval = false;
     this.isFavorite = isFavorite;
+    this.favoriteOperationUrl = buildFourD4yFavoriteOperationUrl(this.route.threadId, isFavorite);
+    this.favoriteActionLabel = isFavorite ? '取消收藏' : '收藏';
     if (isFavorite) {
       this.favoriteState.markFavorite(this.route.threadId);
     } else {
@@ -3992,21 +4216,25 @@ export struct ThreadDetailPage {
       '  const finish = (accessState, hasChallenge, actionUrl, actionLabel, errorMessage) => JSON.stringify({ threadId: threadId, loadSequence: ' + operationSequence + ', accessState: accessState, hasChallenge: hasChallenge, actionUrl: actionUrl || "", actionLabel: actionLabel || "", errorMessage: (errorMessage || "").slice(0, 180) });',
       '  try {',
       '    const pageUrl = new URL(location.href);',
-      '    if (pageUrl.pathname.indexOf("/forum/viewthread.php") < 0 || pageUrl.searchParams.get("tid") !== threadId) return finish("available", false, "", "", "当前页面不是目标主题。");',
+      '    if (pageUrl.origin !== "https://www.4d4y.com" || pageUrl.pathname !== "/forum/viewthread.php" || pageUrl.searchParams.get("tid") !== threadId) return finish("available", false, "", "", "当前页面不是目标主题。");',
       '    const loginForm = document.querySelector("#loginform, form[name=login], input[name=username], input[name=password]");',
       '    if (loginForm) return finish("loginRequired", false, "", "", "登录状态已失效。");',
-      '    const html = document.documentElement.innerHTML;',
-      '    const challenge = html.indexOf("challenge-platform") >= 0 || html.indexOf("cf-chl-") >= 0 || !!document.querySelector(".cf-turnstile");',
-      '    const link = Array.from(document.querySelectorAll("a")).find((node) => { const onclick = node.getAttribute("onclick") || ""; const href = node.getAttribute("href") || ""; return onclick.indexOf("my.php?item=favorites") >= 0 || href.indexOf("my.php?item=favorites") >= 0; });',
-      '    if (!link) return finish("available", challenge, "", "", text(document.querySelector(".alert_info, .alert_error, #messagetext, .message")));',
-      '    const onclick = link.getAttribute("onclick") || "ajaxget(\\\"" + (link.getAttribute("href") || "") + "\\\", \\"favorite_msg\\")";',
-      '    const matched = /ajaxget\\(\\s*[\\x27\\\"]([^\\x27\\\"]*my\\.php\\?item=favorites[^\\x27\\\"]*)[\\x27\\\"]/.exec(onclick);',
-      '    if (!matched) return finish("available", challenge, "", text(link), "当前页面的收藏链接格式无法确认。");',
-      '    const rawUrl = matched[1].replace(/&amp;/g, "&");',
-      '    const actionUrl = new URL(rawUrl, location.href).href;',
-      '    const action = new URL(actionUrl).searchParams.get("action");',
-      '    if (action !== "add" && action !== "remove") return finish("available", challenge, "", text(link), "");',
-      '    return finish("available", challenge, actionUrl, text(link), "");',
+      '    const challenge = !!document.querySelector(".cf-turnstile, #challenge-form, #cf-challenge-running") || /^(?:Just a moment|Attention Required)/i.test(document.title);',
+      '    if (challenge) return finish("available", true, "", "", "");',
+      '    for (const link of Array.from(document.querySelectorAll("a"))) {',
+      '      const onclick = link.getAttribute("onclick") || "";',
+      '      const matched = /ajaxget\\(\\s*[\\x27\\\"]([^\\x27\\\"]+)[\\x27\\\"]/.exec(onclick);',
+      '      for (const rawUrl of [matched ? matched[1] : "", link.getAttribute("href") || ""]) {',
+      '        try { const url = new URL(rawUrl.replace(/&amp;/g, "&"), location.href); const action = url.searchParams.get("action");',
+      '          if (url.origin === pageUrl.origin && url.pathname === "/forum/my.php" && url.searchParams.get("item") === "favorites" && url.searchParams.get("tid") === threadId && (action === "add" || action === "remove")) return finish("available", false, url.href, text(link), "");',
+      '        } catch (_) {}',
+      '      }',
+      '    }',
+      '    const readableTopic = document.querySelectorAll("[id^=postmessage_]").length > 0;',
+      '    const selfLink = document.querySelector("#umenu cite a[href*=\\\"space.php\\\"]");',
+      '    let signedIn = false;',
+      '    try { const selfUrl = new URL(selfLink ? selfLink.getAttribute("href") : "", location.href); signedIn = !!selfLink && selfUrl.origin === pageUrl.origin && selfUrl.pathname === "/forum/space.php" && /^\\d+$/.test(selfUrl.searchParams.get("uid") || ""); } catch (_) {}',
+      '    return finish("available", false, "", "", readableTopic && signedIn ? "" : "当前主题未提供可确认的收藏操作。");',
       '  } catch (_) { return finish("available", false, "", "", "读取服务器收藏状态失败。"); }',
       '})()'
     ].join('\n');
@@ -4024,7 +4252,8 @@ export struct ThreadDetailPage {
       '  const finish = (started, errorMessage) => JSON.stringify({ threadId: threadId, operationSequence: ' + submissionSequence + ', started: started, errorMessage: (errorMessage || "").slice(0, 180) });',
       '  try {',
       '    const pageUrl = new URL(location.href);',
-      '    if (pageUrl.pathname.indexOf("/forum/viewthread.php") < 0 || pageUrl.searchParams.get("tid") !== threadId) return finish(false, "当前页面不是目标主题。");',
+      '    if (pageUrl.origin !== "https://www.4d4y.com" || pageUrl.pathname !== "/forum/viewthread.php" || pageUrl.searchParams.get("tid") !== threadId) return finish(false, "当前页面不是目标主题。");',
+      '    if (document.querySelector(".cf-turnstile, #challenge-form, #cf-challenge-running") || /^(?:Just a moment|Attention Required)/i.test(document.title)) return finish(false, "请先完成 4D4Y 安全验证。");',
       '    const target = document.getElementById("favorite_msg") || document.documentElement;',
       '    if (!target) return finish(false, "当前主题页未提供收藏结果区域。");',
       '    let link = Array.from(document.querySelectorAll("a")).find((node) => {',
@@ -4041,6 +4270,7 @@ export struct ThreadDetailPage {
       '      window.ajaxget(fileName + "?" + favoriteUrl.searchParams.toString(), "favorite_msg");',
       '      return finish(true, "");',
       '    }',
+      '    link.setAttribute("href", actionUrl);',
       '    link.click();',
       '    return finish(true, "");',
       '  } catch (_) { return finish(false, "收藏操作未能在当前主题页启动。"); }',
@@ -4053,17 +4283,19 @@ export struct ThreadDetailPage {
     return [
       '(() => {',
       '  const threadId = ' + safeThreadId + ';',
+      buildFourD4yCollectionPaginationScript('favorites', page),
+      buildFourD4yCollectionVerificationBoundaryScript('favorites'),
       '  const text = (node) => node ? (node.textContent || "").replace(/\\s+/g, " ").trim() : "";',
-      '  const finish = (accessState, hasChallenge, formFound, favoritePresent, errorMessage) => JSON.stringify({ threadId: threadId, operationSequence: ' + submissionSequence + ', page: ' + page + ', accessState: accessState, hasChallenge: hasChallenge, formFound: formFound, favoritePresent: favoritePresent, errorMessage: (errorMessage || "").slice(0, 180) });',
+      '  const finish = (accessState, hasChallenge, formFound, favoritePresent, errorMessage) => JSON.stringify({ threadId: threadId, operationSequence: ' + submissionSequence + ', page: ' + page + ', lastPage: lastPage, accessState: accessState, hasChallenge: hasChallenge, formFound: formFound, favoritePresent: favoritePresent, errorMessage: (errorMessage || "").slice(0, 180) });',
       '  try {',
       '    const pageUrl = new URL(location.href);',
-      '    if (pageUrl.pathname.indexOf("/forum/my.php") < 0 || pageUrl.searchParams.get("item") !== "favorites") return finish("available", false, false, false, "当前页面不是服务器收藏列表。");',
+      '    if (!isCollectionPage(pageUrl, ' + page + ')) return finish("available", false, false, false, "当前页面不是预期的服务器收藏列表页。");',
       '    const loginForm = document.querySelector("#loginform, form[name=login], input[name=username], input[name=password]");',
       '    if (loginForm) return finish("loginRequired", false, false, false, "登录状态已失效。");',
       '    const html = document.documentElement.innerHTML;',
       '    const challenge = html.indexOf("challenge-platform") >= 0 || html.indexOf("cf-chl-") >= 0 || !!document.querySelector(".cf-turnstile");',
       '    const forms = Array.from(document.forms || []);',
-      '    const form = forms.find((candidate) => { try { const action = new URL(candidate.getAttribute("action") || location.href, location.href); return action.pathname.indexOf("/forum/my.php") >= 0 && action.searchParams.get("item") === "favorites" && (action.searchParams.get("type") || "thread") === "thread"; } catch (_) { return false; } });',
+      '    const form = forms.find((candidate) => { try { return isCollectionUrl(new URL(candidate.getAttribute("action") || location.href, location.href)); } catch (_) { return false; } });',
       '    const checkbox = form ? form.querySelector("input[name=\\\"delete[]\\\"][value=\\\"" + threadId + "\\\"]") : null;',
       '    return finish("available", challenge, !!form, !!checkbox, text(document.querySelector(".alert_info, .alert_error, #messagetext, .message")));',
       '  } catch (_) { return finish("available", false, false, false, "读取服务器收藏列表失败。"); }',
@@ -4074,13 +4306,14 @@ export struct ThreadDetailPage {
   private isCurrentFavoriteVerificationRequest(url: string): boolean {
     const sequenceToken: RegExp = new RegExp('[?&]oh_favorite_verify=' + this.favoriteSubmissionSequence + '(?:&|$)');
     const pageToken: RegExp = new RegExp('[?&]page=' + this.favoriteVerificationPage + '(?:&|$)');
+    const attemptToken: RegExp = new RegExp('[?&]oh_verify_attempt=' + this.favoriteVerificationAttempt + '(?:&|$)');
     return url.indexOf('/forum/my.php') >= 0 && url.indexOf('item=favorites') >= 0 &&
-      sequenceToken.test(url) && pageToken.test(url);
+      sequenceToken.test(url) && pageToken.test(url) && attemptToken.test(url);
   }
 
   private async probeAttentionOperation(threadLoadSequence: number): Promise<void> {
     const threadId: string = this.route.threadId;
-    if (!this.isLoggedIn || !/^\d+$/.test(threadId) || this.isAttentionSubmitting) {
+    if (!this.isThreadPageAlive || !this.isLoggedIn || !/^\d+$/.test(threadId) || this.isAttentionSubmitting) {
       return;
     }
     const operationSequence: number = this.attentionOperationSequence + 1;
@@ -4088,7 +4321,15 @@ export struct ThreadDetailPage {
     this.attentionOperationUrl = '';
     this.attentionActionMessage = '';
     this.isAttentionOperationLoading = true;
+    const sessionGeneration: number = this.accountState.getSessionGeneration();
     try {
+      await bindFourD4yCollectionCache(this.getUIContext().getHostContext() as common.Context,
+        this.threadWebController, this.attentionState.cache, 'attention', () => this.isThreadPageAlive &&
+          threadLoadSequence === this.webLoadSequence && operationSequence === this.attentionOperationSequence &&
+          sessionGeneration === this.accountState.getSessionGeneration());
+      if (!this.isThreadPageAlive || threadLoadSequence !== this.webLoadSequence ||
+        operationSequence !== this.attentionOperationSequence || sessionGeneration !== this.accountState.getSessionGeneration()) return;
+      this.isAttentioned = this.attentionState.isAttentioned(threadId);
       // Unlike favorites, the current topic template does not expose a stable
       // attention anchor. NG and MY 4D4Y both use this server contract directly.
       // It is reached only after the visible page itself was identity-checked.
@@ -4173,7 +4414,7 @@ export struct ThreadDetailPage {
       return;
     }
     this.attentionVerificationExpectedState = !this.attentionSubmissionWasRemoval;
-    this.attentionVerificationPage = this.attentionSubmissionWasRemoval ? this.route.initialAttentionPage : 1;
+    this.attentionVerificationPage = 1;
     this.attentionVerificationAttempt = 0;
     this.scheduleAttentionVerificationLoad(submissionSequence, 800);
   }
@@ -4195,7 +4436,8 @@ export struct ThreadDetailPage {
         return;
       }
       const verificationUrl: string = FourD4ySession.forumRoot + 'my.php?item=attention&type=thread&mobile=no&page=' +
-        this.attentionVerificationPage + '&oh_attention_verify=' + submissionSequence;
+        this.attentionVerificationPage + '&oh_attention_verify=' + submissionSequence +
+        '&oh_verify_attempt=' + this.attentionVerificationAttempt;
       try {
         this.attentionVerificationWebController.loadUrl(verificationUrl);
       } catch (_error) {
@@ -4208,14 +4450,16 @@ export struct ThreadDetailPage {
     const threadId: string = this.route.threadId;
     const submissionSequence: number = this.attentionSubmissionSequence;
     const verificationPage: number = this.attentionVerificationPage;
-    if (!this.isAttentionSubmitting || submissionSequence <= 0) {
+    const verificationAttempt: number = this.attentionVerificationAttempt;
+    if (!this.isThreadPageAlive || !this.isAttentionSubmitting || submissionSequence <= 0) {
       return;
     }
     try {
       const rawResult: string = await this.attentionVerificationWebController.runJavaScript(
         this.getAttentionVerificationScript(threadId, submissionSequence, verificationPage)
       );
-      if (!this.isAttentionSubmitting || submissionSequence !== this.attentionSubmissionSequence ||
+      if (!this.isThreadPageAlive || !this.isAttentionSubmitting || verificationAttempt !== this.attentionVerificationAttempt ||
+        submissionSequence !== this.attentionSubmissionSequence ||
         threadId !== this.route.threadId || verificationPage !== this.attentionVerificationPage) {
         return;
       }
@@ -4239,9 +4483,21 @@ export struct ThreadDetailPage {
           '服务器关注列表未提供可确认的表单。');
         return;
       }
-      if (payload.attentionPresent !== this.attentionVerificationExpectedState) {
+      const step: FourD4yCollectionVerificationStep = getFourD4yCollectionVerificationStep(
+        verificationPage, payload.lastPage, payload.attentionPresent, this.attentionVerificationExpectedState);
+      if (step === 'nextPage') {
+        this.attentionVerificationPage += 1;
+        this.scheduleAttentionVerificationLoad(submissionSequence, 250);
+        return;
+      }
+      if (step === 'limit') {
+        this.failAttentionSubmission('关注列表较长，操作结果尚未完整核对；请在关注列表中确认，勿重复提交。');
+        return;
+      }
+      if (step === 'retry') {
         this.attentionVerificationAttempt += 1;
         if (this.attentionVerificationAttempt < 3) {
+          this.attentionVerificationPage = 1;
           this.scheduleAttentionVerificationLoad(submissionSequence, 1200);
           return;
         }
@@ -4252,7 +4508,9 @@ export struct ThreadDetailPage {
       }
       this.completeAttentionSubmission(this.attentionVerificationExpectedState);
     } catch (_error) {
-      if (this.isAttentionSubmitting && submissionSequence === this.attentionSubmissionSequence) {
+      if (this.isThreadPageAlive && this.isAttentionSubmitting &&
+        submissionSequence === this.attentionSubmissionSequence && threadId === this.route.threadId &&
+        verificationPage === this.attentionVerificationPage && verificationAttempt === this.attentionVerificationAttempt) {
         this.failAttentionSubmission('读取服务器关注列表失败；请稍后重试。');
       }
     }
@@ -4327,11 +4585,13 @@ export struct ThreadDetailPage {
     const safeThreadId: string = JSON.stringify(threadId);
     return [
       '(() => { const threadId = ' + safeThreadId + '; const text = (node) => node ? (node.textContent || "").replace(/\\s+/g, " ").trim() : "";',
-      '  const finish = (accessState, hasChallenge, formFound, favoritePresent, errorMessage) => JSON.stringify({ threadId: threadId, operationSequence: ' + submissionSequence + ', page: ' + page + ', accessState: accessState, hasChallenge: hasChallenge, formFound: formFound, favoritePresent: favoritePresent, errorMessage: (errorMessage || "").slice(0, 180) });',
-      '  try { const pageUrl = new URL(location.href); if (pageUrl.pathname.indexOf("/forum/my.php") < 0 || pageUrl.searchParams.get("item") !== "attention") return finish("available", false, false, false, "当前页面不是服务器关注列表。");',
+      buildFourD4yCollectionPaginationScript('attention', page),
+      buildFourD4yCollectionVerificationBoundaryScript('attention'),
+      '  const finish = (accessState, hasChallenge, formFound, favoritePresent, errorMessage) => JSON.stringify({ threadId: threadId, operationSequence: ' + submissionSequence + ', page: ' + page + ', lastPage: lastPage, accessState: accessState, hasChallenge: hasChallenge, formFound: formFound, favoritePresent: favoritePresent, errorMessage: (errorMessage || "").slice(0, 180) });',
+      '  try { const pageUrl = new URL(location.href); if (!isCollectionPage(pageUrl, ' + page + ')) return finish("available", false, false, false, "当前页面不是预期的服务器关注列表页。");',
       '    const loginForm = document.querySelector("#loginform, form[name=login], input[name=username], input[name=password]"); if (loginForm) return finish("loginRequired", false, false, false, "登录状态已失效。");',
       '    const html = document.documentElement.innerHTML; const challenge = html.indexOf("challenge-platform") >= 0 || html.indexOf("cf-chl-") >= 0 || !!document.querySelector(".cf-turnstile");',
-      '    const form = Array.from(document.forms || []).find((candidate) => { try { const action = new URL(candidate.getAttribute("action") || location.href, location.href); return action.pathname.indexOf("/forum/my.php") >= 0 && action.searchParams.get("item") === "attention" && (action.searchParams.get("type") || "thread") === "thread"; } catch (_) { return false; } });',
+      '    const form = Array.from(document.forms || []).find((candidate) => { try { return isCollectionUrl(new URL(candidate.getAttribute("action") || location.href, location.href)); } catch (_) { return false; } });',
       '    const checkbox = form ? form.querySelector("input[name=\\\"delete[]\\\"][value=\\\"" + threadId + "\\\"]") : null; return finish("available", challenge, !!form, !!checkbox, text(document.querySelector(".alert_info, .alert_error, #messagetext, .message")));',
       '  } catch (_) { return finish("available", false, false, false, "读取服务器关注列表失败。"); } })()'
     ].join('\n');
@@ -4340,12 +4600,13 @@ export struct ThreadDetailPage {
   private isCurrentAttentionVerificationRequest(url: string): boolean {
     const sequenceToken: RegExp = new RegExp('[?&]oh_attention_verify=' + this.attentionSubmissionSequence + '(?:&|$)');
     const pageToken: RegExp = new RegExp('[?&]page=' + this.attentionVerificationPage + '(?:&|$)');
+    const attemptToken: RegExp = new RegExp('[?&]oh_verify_attempt=' + this.attentionVerificationAttempt + '(?:&|$)');
     return url.indexOf('/forum/my.php') >= 0 && url.indexOf('item=attention') >= 0 &&
-      sequenceToken.test(url) && pageToken.test(url);
+      sequenceToken.test(url) && pageToken.test(url) && attemptToken.test(url);
   }
 
   private isCurrentThreadRequest(url: string): boolean {
-    return isCurrentFourD4yWebRequest(url, '/forum/viewthread.php', this.webLoadSequence);
+    return this.isThreadPageAlive && isCurrentFourD4yWebRequest(url, '/forum/viewthread.php', this.webLoadSequence);
   }
 
   private isThreadLoadTerminal(sequence: number = this.webLoadSequence): boolean {
@@ -4400,6 +4661,7 @@ export struct ThreadDetailPage {
 
   private restoreThreadRefreshPosition(): void {
     const offset: number = this.pendingRefreshScrollOffset;
+    const sequence: number = this.webLoadSequence;
     this.pendingRefreshScrollOffset = -1;
     if (offset < 0) {
       return;
@@ -4407,6 +4669,9 @@ export struct ThreadDetailPage {
     // The refreshed List applies its new items in the next ArkUI layout pass.
     // Deferring once lets Scroller clamp the old offset to the new content.
     setTimeout(() => {
+      if (!this.isThreadPageAlive || sequence !== this.webLoadSequence) {
+        return;
+      }
       try {
         this.postListScroller.scrollTo({ xOffset: 0, yOffset: offset, animation: false });
       } catch (_error) {
@@ -4447,7 +4712,10 @@ export struct ThreadDetailPage {
       lastReadFloor: firstPost.floor,
       visitedAt: Date.now()
     };
-    void this.readHistoryState.record(this.getUIContext().getHostContext() as common.Context, entry);
+    this.readHistoryState.record(this.getUIContext().getHostContext() as common.Context, entry).catch(() => {
+      // Reading remains usable; a storage failure must not erase older history
+      // or create an unhandled promise. A later confirmed page retries normally.
+    });
   }
 
   private subscribeToBlacklistState(): void {
@@ -4681,6 +4949,7 @@ export struct ThreadDetailPage {
       '  const actionKind = actionUrl.searchParams.get("action") || asUrl(location.href).searchParams.get("action") || "";',
       '  const matchesValue = (name, expected) => {',
       '    if (!form) return false;',
+      '    if (actionUrl.origin !== "https://www.4d4y.com" || actionUrl.pathname !== "/forum/post.php") return false;',
       '    const inAction = actionUrl.searchParams.get(name) === expected;',
       '    const inField = Array.from(form.querySelectorAll("input[name]")).some((input) => (input.getAttribute("name") || "") === name && input.value === expected);',
       '    return inAction || inField;',
@@ -4714,6 +4983,7 @@ export struct ThreadDetailPage {
       '    const form = (deleteInput && deleteInput.form) || forms.find((candidate) => { const action = asUrl(candidate.getAttribute("action") || location.href); return action.pathname.indexOf("post.php") >= 0 && action.searchParams.get("action") === "edit"; }) || forms.find((candidate) => (candidate.getAttribute("id") || "") === "postform") || null;',
       '    if (!form || (form.method || "get").toLowerCase() !== "post" || !form.querySelector("input[name=formhash]")) return finish(false, "删除表单已变化。");',
       '    const action = asUrl(form.getAttribute("action") || location.href);',
+      '    if (action.origin !== "https://www.4d4y.com" || action.pathname !== "/forum/post.php") return finish(false, "删除表单地址不属于 4D4Y。");',
       '    const matchesValue = (name, expected) => action.searchParams.get(name) === expected || Array.from(form.querySelectorAll("input[name]")).some((input) => (input.getAttribute("name") || "") === name && input.value === expected);',
       '    if (action.searchParams.get("action") !== "edit" || !matchesValue("pid", postId) || !matchesValue("tid", threadId)) return finish(false, "删除表单不属于当前帖子。");',
       '    const submit = form.querySelector("input[name=editsubmit], button[name=editsubmit], input[type=submit], button[type=submit]");',
@@ -4737,10 +5007,9 @@ export struct ThreadDetailPage {
       '  try {',
       '    const url = new URL(location.href);',
       '    const loginForm = document.querySelector("#loginform, form[name=login], input[name=username], input[name=password]");',
-      '    const html = document.documentElement.innerHTML;',
-      '    const challenge = html.indexOf("challenge-platform") >= 0 || html.indexOf("cf-chl-") >= 0 || !!document.querySelector(".cf-turnstile, #challenge-form, [data-sitekey]");',
-      '    const isTargetThreadPage = url.pathname.indexOf("viewthread.php") >= 0 && url.searchParams.get("tid") === threadId;',
-      '    const isForumPage = url.pathname.indexOf("forumdisplay.php") >= 0;',
+      '    const challenge = !!document.querySelector(".cf-turnstile, #challenge-form, #cf-challenge-running, [data-sitekey]") || /^(?:Just a moment|Attention Required)/i.test(document.title);',
+      '    const isTargetThreadPage = url.origin === "https://www.4d4y.com" && url.pathname === "/forum/viewthread.php" && url.searchParams.get("tid") === threadId && !!document.querySelector("[id^=postmessage_]");',
+      '    const isForumPage = url.origin === "https://www.4d4y.com" && url.pathname === "/forum/forumdisplay.php" && url.searchParams.get("fid") === ' + JSON.stringify(this.route.forumId) + ';',
       '    const postStillPresent = !!document.getElementById("post_" + postId) || !!document.getElementById("pid" + postId) || !!document.getElementById("postmessage_" + postId);',
       '    const alert = document.querySelector(".alert_info, .alert_error, #messagetext, .message");',
       '    const errorMessage = alert ? (alert.innerText || alert.textContent || "").replace(/\\s+/g, " ").trim() : "";',
@@ -5102,7 +5371,10 @@ export struct ThreadDetailPage {
       '      floor: floorMatch ? Number.parseInt(floorMatch[0], 10) : ((requestedPage - 1) * 50) + index + 1,',
       '      hasExplicitFloor: !!localFloorNode && !!floorMatch,',
       '      authorName: authorName,',
-      '      authorUserId: authorUserId,',
+      // Missing/deleted/anonymous profile links carry no identity. Preserve
+      // the readable floor, but omit the optional UID (and identity actions).
+      // An empty string would violate the native reader's numeric-ID contract.
+      '      authorUserId: authorUserId || undefined,',
       '      publishedAt: toText(post.querySelector(".replytop time, .replytop em, .authorinfo em") || authorMarker),',
       '      statusText: toText(statusNode).slice(0, 240),',
       '      content: extractContent(bodyNode, postContainer)',
@@ -5120,23 +5392,21 @@ export struct ThreadDetailPage {
       '    const preview = quotePreviewText(sourcePost);',
       '    if (preview) item.value = preview;',
       '  }));',
-      '  let lastPage = 1;',
+      '  let lastPage = Math.max(1, Number.parseInt(params.get("page") || "1", 10) || 1);',
       '  const readPageNumber = (value) => {',
       '    const raw = (value || "").replace(/&amp;/g, "&");',
-      '    let decoded = raw;',
-      '    try { decoded = decodeURIComponent(raw); } catch (_) {}',
-      '    const match = /(?:[?&])page=(\\d+)/.exec(decoded);',
-      '    return match ? Number.parseInt(match[1], 10) : 0;',
+      '    try {',
+      '      const target = new URL(raw, location.href);',
+      '      if (target.origin !== "https://www.4d4y.com" || target.pathname !== "/forum/viewthread.php" || target.searchParams.get("tid") !== params.get("tid")) return 0;',
+      '      if ((target.searchParams.get("authorid") || "") !== (params.get("authorid") || "")) return 0;',
+      '      const page = target.searchParams.get("page") || "";',
+      '      return /^\\d{1,6}$/.test(page) ? Number.parseInt(page, 10) : 0;',
+      '    } catch (_) { return 0; }',
       '  };',
       '  Array.from(document.querySelectorAll("a[href]")).forEach((link) => {',
+      '    if (link.closest("[id^=postmessage_], [id^=post_], [id^=pid], .quote, .signatures")) return;',
       '    lastPage = Math.max(lastPage, readPageNumber(link.getAttribute("href") || ""));',
       '  });',
-      '  const sourcePagePattern = /(?:[?&]|&amp;)page(?:=|%3D)(\\d+)/g;',
-      '  let sourcePageMatch = sourcePagePattern.exec(document.documentElement.innerHTML);',
-      '  while (sourcePageMatch) {',
-      '    lastPage = Math.max(lastPage, Number.parseInt(sourcePageMatch[1], 10));',
-      '    sourcePageMatch = sourcePagePattern.exec(document.documentElement.innerHTML);',
-      '  }',
       '  const currentMatch = /\\d+/.exec(toText(document.querySelector(".pages strong")));',
       '  return JSON.stringify({',
       '    threadId: params.get("tid") || "",',

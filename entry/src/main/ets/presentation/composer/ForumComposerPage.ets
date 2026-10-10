@@ -13,9 +13,10 @@ import { FourD4yComposerChoice, FourD4yComposerImageAttachment, FourD4yComposerP
   supportsFourD4yComposerImageUpload } from '../../domain/composer/FourD4yComposerContracts';
 import { FourD4yPageAccessState } from '../../domain/reader/FourD4yReaderContracts';
 import { createForumComposerPostEditedResult, createForumComposerReplyPublishedResult,
+  createForumComposerThreadPublishedResult,
   ForumComposerRouteParams } from './ForumComposerRouteState';
-import { createThreadRouteParams } from '../thread/ThreadRouteState';
 import { FourD4ySession } from '../../data/remote/FourD4ySession';
+import { buildFourD4yPostFormBoundaryScript, isCurrentFourD4yPostPreflightUrl } from '../../domain/composer/FourD4yPostFormBoundary';
 import { buildFourD4yNewThreadSubmissionScript, buildFourD4yNewThreadResultReadScript }
   from '../../domain/composer/FourD4yNewThreadSubmission';
 
@@ -187,6 +188,15 @@ export struct ForumComposerPage {
   }
 
   aboutToDisappear(): void {
+    // Invalidate pending picker, form and result callbacks before disposing
+    // their timers. Leaving must not start the next upload or submit a form
+    // whose asynchronous preflight completed after the editor was closed.
+    this.isComposerRouteReady = false;
+    this.formSequence += 1;
+    this.submissionSequence += 1;
+    this.pendingImageUploadSequence = -1;
+    this.nativeImageUploadProbeSequence = -1;
+    this.isUnusedImageDecisionPending = false;
     this.clearFormWatchdog();
     this.clearImageUploadHashProbe();
     this.clearImageUploadStatusPolling();
@@ -1021,6 +1031,9 @@ export struct ForumComposerPage {
   }
 
   private prepareForm(operation: ComposerWebOperation = ComposerWebOperation.Preflight): void {
+    if (!this.isComposerRouteReady) {
+      return;
+    }
     if (!this.hasValidRouteIdentity()) {
       this.failPreflight('发帖目标不完整，已阻止打开表单。');
       return;
@@ -1098,8 +1111,10 @@ export struct ForumComposerPage {
   }
 
   private isCurrentPreflightRequest(url: string): boolean {
-    return url.indexOf('/forum/post.php') >= 0 &&
-      url.indexOf('oh_compose=' + this.formSequence) >= 0;
+    const action: string = this.route.mode === ForumComposerMode.NewThread ? 'newthread' :
+      (this.route.mode === ForumComposerMode.Edit ? 'edit' : 'reply');
+    return this.isComposerRouteReady && isCurrentFourD4yPostPreflightUrl(url, action, this.route.threadId,
+      this.route.postId, 'oh_compose', this.formSequence, this.route.forumId);
   }
 
   private handleCompletedWebLoad(url: string): void {
@@ -1276,7 +1291,7 @@ export struct ForumComposerPage {
           continue;
         }
         this.formMessage = '正在上传图片（' + (index + 1) + '/' + selectedUris.length + '）…';
-        const attachmentId: string = await this.uploadNativeImage(image);
+        const attachmentId: string = await this.uploadNativeImage(image, sequence);
         if (sequence !== this.pendingImageUploadSequence || !this.isImageUploading) {
           return;
         }
@@ -1377,10 +1392,12 @@ export struct ForumComposerPage {
     return 'jpg';
   }
 
-  private async uploadNativeImage(image: NativeImageUploadFile): Promise<string> {
+  private async uploadNativeImage(image: NativeImageUploadFile, sequence: number): Promise<string> {
     try {
       const contract: DetailedImageUploadContract | null = await this.getDetailedImageUploadContract();
-      if (contract === null) {
+      if (contract === null || !this.isComposerRouteReady ||
+        sequence !== this.pendingImageUploadSequence || !this.isImageUploading ||
+        (this.viewerUserId.length > 0 && contract.userId !== this.viewerUserId)) {
         return '';
       }
       const request: http.HttpRequest = http.createHttp();
@@ -1388,7 +1405,8 @@ export struct ForumComposerPage {
         const uploadUrl: string = 'https://www.4d4y.com/forum/misc.php?action=swfupload&operation=upload&simple=1&type=image';
         const payload: NativeImageUploadPayload = this.buildNativeImageUploadPayload(contract, image);
         const cookieHeader: string = await this.getNativeImageUploadCookieHeader(contract.userId);
-        if (cookieHeader.length === 0) {
+        if (cookieHeader.length === 0 || !this.isComposerRouteReady ||
+          sequence !== this.pendingImageUploadSequence || !this.isImageUploading) {
           return '';
         }
         const response: http.HttpResponse = await request.request(
@@ -1854,6 +1872,9 @@ export struct ForumComposerPage {
         { text: '丢弃并发送', color: $r('app.color.danger_text') }
       ]
     }).then((result) => {
+      if (!this.isComposerRouteReady || preflightSequence !== this.formSequence) {
+        return;
+      }
       if (result.index === 1) {
         this.isUnusedImageDecisionPending = false;
         this.beginSubmission(preflightSequence);
@@ -1875,7 +1896,7 @@ export struct ForumComposerPage {
   }
 
   private async beginSubmission(preflightSequence: number): Promise<void> {
-    if (this.webOperation !== ComposerWebOperation.Submit || preflightSequence !== this.formSequence ||
+    if (!this.isComposerRouteReady || this.webOperation !== ComposerWebOperation.Submit || preflightSequence !== this.formSequence ||
       this.isUnusedImageDecisionPending) {
       return;
     }
@@ -1886,9 +1907,10 @@ export struct ForumComposerPage {
   }
 
   private async submitLoadedForm(): Promise<void> {
-    if (!this.isSubmitting) {
+    if (!this.isComposerRouteReady || !this.isSubmitting) {
       return;
     }
+    const sequence: number = this.submissionSequence;
     let script: string = '';
     try {
       script = this.getSubmissionScript(this.pendingSubject, this.pendingMessage,
@@ -1896,11 +1918,13 @@ export struct ForumComposerPage {
         this.pendingDiscardImageAttachmentIds, this.pendingRemovedExistingImageAttachmentIds,
         this.pendingRemovedNewImageAttachmentIds);
       await this.webController.runJavaScript(script);
-      if (this.route.mode === ForumComposerMode.NewThread && this.isSubmitting) {
-        this.pollNewThreadSubmission(this.submissionSequence);
+      if (this.isComposerRouteReady && sequence === this.submissionSequence &&
+        this.route.mode === ForumComposerMode.NewThread && this.isSubmitting) {
+        this.pollNewThreadSubmission(sequence);
       }
     } catch (_error) {
-      if (this.route.mode === ForumComposerMode.NewThread && this.isSubmitting) {
+      if (this.isComposerRouteReady && sequence === this.submissionSequence &&
+        this.route.mode === ForumComposerMode.NewThread && this.isSubmitting) {
         this.failSubmission('无法启动发主题提交；草稿已保留，请先核对论坛后重试。');
       }
       // The navigation following requestSubmit() can interrupt this promise.
@@ -1910,13 +1934,13 @@ export struct ForumComposerPage {
 
   private async pollNewThreadSubmission(sequence: number): Promise<void> {
     this.topicSubmissionPollId = -1;
-    if (!this.isSubmitting || sequence !== this.submissionSequence) {
+    if (!this.isComposerRouteReady || !this.isSubmitting || sequence !== this.submissionSequence) {
       return;
     }
     try {
       const raw: string = await this.webController.runJavaScript(
         buildFourD4yNewThreadResultReadScript(sequence));
-      if (!this.isSubmitting || sequence !== this.submissionSequence) {
+      if (!this.isComposerRouteReady || !this.isSubmitting || sequence !== this.submissionSequence) {
         return;
       }
       if (raw === 'pending' || raw === '"pending"') {
@@ -1927,7 +1951,7 @@ export struct ForumComposerPage {
         this.readSubmissionResult();
       }
     } catch (_error) {
-      if (this.isSubmitting && sequence === this.submissionSequence) {
+      if (this.isComposerRouteReady && this.isSubmitting && sequence === this.submissionSequence) {
         this.failSubmission('读取发主题结果失败；请先到论坛核对，勿立即重复发送。');
       }
     }
@@ -1967,8 +1991,8 @@ export struct ForumComposerPage {
       this.isFormReady = false;
       this.formMessage = '已发表。';
       if (this.route.mode === ForumComposerMode.NewThread && payload.createdThreadId.length > 0) {
-        this.pathStack.pushPathByName('ThreadDetail',
-          createThreadRouteParams(payload.createdThreadId, this.pendingSubject, 0, 1, 0, this.route.forumId));
+        this.pathStack.pop(createForumComposerThreadPublishedResult(payload.createdThreadId,
+          this.route.forumId, this.pendingSubject));
         return;
       }
       if (this.route.mode === ForumComposerMode.Reply || this.route.mode === ForumComposerMode.Quote) {
@@ -2628,12 +2652,8 @@ export struct ForumComposerPage {
       '  const discardedImageAttachmentIds = ' + safeDiscardedImageAttachmentIds + ';',
       '  const removedExistingImageAttachmentIds = ' + safeRemovedExistingImageAttachmentIds + ';',
       '  const removedNewImageAttachmentIds = ' + safeRemovedNewImageAttachmentIds + ';',
-      '  const asUrl = (value) => { try { return new URL(value || location.href, location.href); } catch (_) { return new URL(location.href); } };',
-      '  const forms = Array.from(document.forms || []);',
-      '  const form = forms.find((candidate) => { const action = asUrl(candidate.getAttribute("action") || location.href); return action.pathname.indexOf("post.php") >= 0 && action.searchParams.get("action") === expectedAction; }) || forms.find((candidate) => candidate.querySelector("textarea[name=message]") !== null);',
-      '  const message = form ? form.querySelector("textarea[name=message]") : null;',
-      '  if (!form || !message) { throw new Error("composer-form-not-ready"); }',
-      '  const actionUrl = asUrl(form.getAttribute("action") || location.href);',
+      buildFourD4yPostFormBoundaryScript(expectedAction, this.route.threadId, this.route.postId,
+        'oh_compose', this.formSequence),
       '  message.value = ' + safeMessage + ';',
       '  const subject = form.querySelector("input[name=subject]");',
       '  if (subject) subject.value = ' + safeSubject + ';',
@@ -2650,6 +2670,9 @@ export struct ForumComposerPage {
       '    const hasExpectedValue = (name, expected) => actionUrl.searchParams.get(name) === expected || Array.from(form.querySelectorAll("input[name]")).some((input) => (input.getAttribute("name") || "") === name && input.value === expected);',
       '    const submit = form.querySelector("input[name=editsubmit], button[name=editsubmit], input[type=submit], button[type=submit]");',
       '    if (!actionUrl || !hasExpectedValue("tid", ' + JSON.stringify(this.route.threadId) + ') || !hasExpectedValue("pid", ' + JSON.stringify(this.route.postId) + ') || !form.querySelector("input[name=formhash]") || !submit) throw new Error("edit-form-contract-changed");',
+      // The live edit form can also expose older staged uploads. Only native
+      // selections may associate/delete attachments in this edit operation.
+      '    Array.from(form.querySelectorAll("input[name]")).forEach((input) => { if (/^(?:attachnew|attachdel)(?:\\[|$)/i.test(input.getAttribute("name") || "")) input.remove(); });',
       '    const appendEditField = (name, value) => { const field = document.createElement("input"); field.type = "hidden"; field.name = name; field.value = value; form.appendChild(field); };',
       '    const ensureEditAttachmentField = (name, attachmentId) => {',
       '      if (!/^\\d+$/.test(attachmentId)) return;',
@@ -2671,7 +2694,7 @@ export struct ForumComposerPage {
       // use the same safe principle here while preserving this live form.
       '    const hasEditSubmitSignal = actionUrl.searchParams.has("editsubmit") || !!form.querySelector("input[type=hidden][name=editsubmit]");',
       '    if (!hasEditSubmitSignal) { const signal = document.createElement("input"); signal.type = "hidden"; signal.name = "editsubmit"; signal.value = "yes"; form.appendChild(signal); }',
-      '    form.submit();',
+      '    window.__hipdaPostSubmitted = true; HTMLFormElement.prototype.submit.call(form);',
       '    return "submitted";',
       '  }',
       // A refreshed 4D4Y form can carry the account's older unused uploads.
@@ -2700,7 +2723,7 @@ export struct ForumComposerPage {
       '  const submit = form.querySelector("input[type=submit], button[type=submit], button[name*=submit]");',
       '  const submitName = submit ? (submit.getAttribute("name") || "") : "";',
       '  if (submitName && !actionUrl.searchParams.has(submitName) && copiedNames.indexOf(submitName) < 0) appendField(submitName, submit.value || "yes");',
-      '  document.body.appendChild(outgoing); outgoing.submit();',
+      '  document.body.appendChild(outgoing); window.__hipdaPostSubmitted = true; HTMLFormElement.prototype.submit.call(outgoing);',
       '})()'
     ].join('\n');
   }
@@ -2720,7 +2743,7 @@ export struct ForumComposerPage {
       '  const loginRequired = !!document.querySelector("input[name=username], input[name=password]");',
       '  const alert = document.querySelector(".alert_info, .alert_error, #messagetext");',
       '  const errorMessage = alert ? (alert.innerText || alert.textContent || "").trim().slice(0, 240) : "";',
-      '  const isThread = url.pathname.indexOf("viewthread.php") >= 0 || url.pathname.indexOf("redirect.php") >= 0;',
+      '  const isThread = url.origin === "https://www.4d4y.com" && url.searchParams.getAll("tid").length === 1 && (url.pathname === "/forum/viewthread.php" || url.pathname === "/forum/redirect.php");',
       '  const succeeded = mode === "newThread" ? (isThread && /^\\d+$/.test(createdThreadId)) : (isThread && createdThreadId === threadId);',
       '  return JSON.stringify({ mode: mode, threadId: threadId, submissionSequence: ' + submissionSequence + ', succeeded: succeeded, createdThreadId: mode === "newThread" ? createdThreadId : "", loginRequired: loginRequired, errorMessage: errorMessage });',
       '})()'

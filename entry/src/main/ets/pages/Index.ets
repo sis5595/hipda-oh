@@ -24,8 +24,10 @@ import { FourD4yAttentionState } from '../domain/attention/FourD4yAttentionState
 import { FourD4yBlacklistState } from '../domain/blacklist/FourD4yBlacklistState';
 import { FourD4yReadHistoryState } from '../domain/history/FourD4yReadHistoryState';
 import { FourD4yAccountState } from '../domain/account/FourD4yAccountState';
+import { FourD4yAccountService } from '../domain/account/FourD4yAccountService';
 import { FourD4yUnreadState } from '../domain/notice/FourD4yUnreadState';
 import { FourD4yObservedReplyCounts } from '../domain/thread/FourD4yObservedReplyCounts';
+import { FourD4yThreadMutationState } from '../domain/thread/FourD4yThreadMutationState';
 import { FourD4yPrivacyConsentStore } from '../data/local/FourD4yPrivacyConsentStore';
 import { FOUR_D4Y_PRIVACY_POLICY_SECTIONS, FourD4yPrivacyPolicySection } from '../domain/privacy/FourD4yPrivacyPolicy';
 
@@ -44,14 +46,21 @@ struct Index {
   @Provide('unreadState') unreadState: FourD4yUnreadState = new FourD4yUnreadState();
   @Provide('observedReplyCounts') observedReplyCounts: FourD4yObservedReplyCounts =
     new FourD4yObservedReplyCounts();
+  @Provide('threadMutationState') threadMutationState: FourD4yThreadMutationState = new FourD4yThreadMutationState();
   @StorageLink('hipdaoh_privacy_accepted') privacyAccepted: boolean = false;
   @State privacyReady: boolean = false;
   @State isAcceptingPrivacyPolicy: boolean = false;
   @State privacyErrorMessage: string = '';
   @State isPolicyDetailVisible: boolean = false;
+  private isIndexAlive: boolean = false;
 
   aboutToAppear(): void {
+    this.isIndexAlive = true;
     void this.loadPrivacyConsent();
+  }
+
+  aboutToDisappear(): void {
+    this.isIndexAlive = false;
   }
 
   @Builder
@@ -150,7 +159,7 @@ struct Index {
             this.isPolicyDetailVisible = !this.isPolicyDetailVisible;
           });
         if (this.isPolicyDetailVisible) {
-          Text('开发者：sis5595；联系邮箱：sis5595@hotmail.com；更新日期：2026 年 9 月 20 日。')
+          Text('开发者：sis5595；联系邮箱：sis5595@hotmail.com；更新日期：2026 年 10 月 7 日。')
             .fontSize(13)
             .fontColor($r('app.color.text_secondary'))
             .width('100%')
@@ -218,9 +227,18 @@ struct Index {
     try {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
       const accepted: boolean = await FourD4yPrivacyConsentStore.hasAcceptedCurrentPolicy(context);
+      if (accepted && this.isIndexAlive) {
+        await FourD4yAccountService.restoreStartupSession(context, () => this.isIndexAlive);
+      }
+      if (!this.isIndexAlive) {
+        return;
+      }
       AppStorage.setOrCreate<boolean>('hipdaoh_privacy_accepted', accepted);
       AppStorage.set<boolean>('hipdaoh_privacy_accepted', accepted);
     } catch (_error) {
+      if (!this.isIndexAlive) {
+        return;
+      }
       AppStorage.setOrCreate<boolean>('hipdaoh_privacy_accepted', false);
       AppStorage.set<boolean>('hipdaoh_privacy_accepted', false);
     }
@@ -228,7 +246,7 @@ struct Index {
   }
 
   private async acceptPrivacyPolicy(): Promise<void> {
-    if (this.isAcceptingPrivacyPolicy) {
+    if (!this.isIndexAlive || this.isAcceptingPrivacyPolicy) {
       return;
     }
     this.privacyErrorMessage = '';
@@ -236,13 +254,23 @@ struct Index {
     try {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
       const accepted: boolean = await FourD4yPrivacyConsentStore.acceptCurrentPolicy(context);
+      if (!this.isIndexAlive) {
+        return;
+      }
       if (!accepted) {
         this.privacyErrorMessage = '无法保存你的选择，请稍后重试。';
         this.isAcceptingPrivacyPolicy = false;
         return;
       }
+      await FourD4yAccountService.restoreStartupSession(context, () => this.isIndexAlive);
+      if (!this.isIndexAlive) {
+        return;
+      }
       AppStorage.set<boolean>('hipdaoh_privacy_accepted', true);
     } catch (_error) {
+      if (!this.isIndexAlive) {
+        return;
+      }
       this.privacyErrorMessage = '无法保存你的选择，请稍后重试。';
     }
     this.isAcceptingPrivacyPolicy = false;
