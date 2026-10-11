@@ -38,6 +38,8 @@ $devEcoRoot = 'D:\Program Files\DevEco Studio'
 
 小白调试助手（[项目说明](https://github.com/likuai2010/auto-installer)、[版本与使用说明](https://github.com/likuai2010/auto-installer/releases)）支持导入 HAP 后签名安装。用户需自行满足工具要求的账号、开发者模式和设备绑定条件；签名到期需要续签。重新签名可能改变安装身份，无法覆盖已有不同签名的安装；不要为了验证流程直接卸载用户的日常应用。
 
+`1.0.0-beta.2` 的未签名候选 HAP 已由维护者使用小白调试助手 **2.4.0** 在 **Mate 60** 上完成签名安装验证。其他设备的安装仍需满足相应系统版本和工具要求。
+
 政策版本在 `FourD4yPrivacyPolicy.ets` 的 `FOUR_D4Y_PRIVACY_POLICY_VERSION` 统一维护，显示日期由它生成，同意存储引用同一版本。修改政策时还须同步 Markdown 政策；离线回归会校验日期、版本及联系方式一致性。
 
 ## 测试
