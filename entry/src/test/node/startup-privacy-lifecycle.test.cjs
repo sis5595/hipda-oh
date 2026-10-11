@@ -15,10 +15,12 @@ function execute(source, dependencies = {}, globals = {}) {
   return exports;
 }
 let raw = '', failFlush = false;
+const policy = execute(fs.readFileSync(path.join(root, 'domain/privacy/FourD4yPrivacyPolicy.ets'), 'utf8'));
 const prefs = { getSync: () => raw, put: async (_key, value) => { raw = value; },
   flush: async () => { if (failFlush) throw new Error('synthetic flush failure'); } };
 const store = execute(fs.readFileSync(path.join(root, 'data/local/FourD4yPrivacyConsentStore.ets'), 'utf8'), {
-  '@kit.ArkData': { preferences: { getPreferences: async () => prefs } }
+  '@kit.ArkData': { preferences: { getPreferences: async () => prefs } },
+  '../../domain/privacy/FourD4yPrivacyPolicy': policy
 }).FourD4yPrivacyConsentStore;
 let pending = [];
 const EntryAbility = execute(fs.readFileSync(path.join(root, 'entryability/EntryAbility.ets'), 'utf8'), {
@@ -30,6 +32,12 @@ const EntryAbility = execute(fs.readFileSync(path.join(root, 'entryability/Entry
 }, { AppStorage: { setOrCreate: () => {} } }).default;
 const tick = () => new Promise(resolve => setImmediate(resolve));
 (async () => {
+  assert.equal(store.POLICY_VERSION, policy.FOUR_D4Y_PRIVACY_POLICY_VERSION);
+  for (const previous of ['', '2026-09-20', '2026-10-10']) {
+    raw = previous;
+    assert.equal(await store.hasAcceptedCurrentPolicy({}), false, 'old or absent consent must be renewed');
+  }
+  raw = '';
   failFlush = true;
   assert.equal(await store.acceptCurrentPolicy({}), false);
   assert.equal(await store.hasAcceptedCurrentPolicy({}), false,

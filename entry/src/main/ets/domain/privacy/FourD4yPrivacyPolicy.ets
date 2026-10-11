@@ -1,7 +1,11 @@
 /** Content shared by the first-run consent screen and the in-app policy page. */
 export const FOUR_D4Y_PRIVACY_POLICY_TITLE: string = 'HiPDA·OH 隐私政策';
-export const FOUR_D4Y_PRIVACY_POLICY_UPDATED_AT: string = '2026 年 10 月 10 日';
-export const FOUR_D4Y_PRIVACY_CONTACT: string = 'sis5595@hotmail.com';
+export const FOUR_D4Y_PRIVACY_POLICY_VERSION: string = '2026-10-11';
+export const FOUR_D4Y_PRIVACY_POLICY_UPDATED_AT: string =
+  FOUR_D4Y_PRIVACY_POLICY_VERSION.slice(0, 4) + ' 年 ' +
+  Number(FOUR_D4Y_PRIVACY_POLICY_VERSION.slice(5, 7)) + ' 月 ' +
+  Number(FOUR_D4Y_PRIVACY_POLICY_VERSION.slice(8, 10)) + ' 日';
+export const FOUR_D4Y_PRIVACY_CONTACT: string = 'sis5595@gmail.com';
 
 export interface FourD4yPrivacyPolicySection {
   title: string;

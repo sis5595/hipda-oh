@@ -1,12 +1,13 @@
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
+import { FOUR_D4Y_PRIVACY_POLICY_VERSION } from '../../domain/privacy/FourD4yPrivacyPolicy';
 
 /**
  * Stores only the accepted policy revision. It deliberately does not contain a
  * forum account, device identifier, network address, or consent timestamp.
  */
 export class FourD4yPrivacyConsentStore {
-  static readonly POLICY_VERSION: string = '2026-09-20';
+  static readonly POLICY_VERSION: string = FOUR_D4Y_PRIVACY_POLICY_VERSION;
 
   private static readonly PREFERENCES_NAME: string = 'hipdaoh_privacy_consent';
   private static readonly ACCEPTED_VERSION_KEY: string = 'accepted_policy_version';

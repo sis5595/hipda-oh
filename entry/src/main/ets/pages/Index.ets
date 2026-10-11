@@ -29,7 +29,8 @@ import { FourD4yUnreadState } from '../domain/notice/FourD4yUnreadState';
 import { FourD4yObservedReplyCounts } from '../domain/thread/FourD4yObservedReplyCounts';
 import { FourD4yThreadMutationState } from '../domain/thread/FourD4yThreadMutationState';
 import { FourD4yPrivacyConsentStore } from '../data/local/FourD4yPrivacyConsentStore';
-import { FOUR_D4Y_PRIVACY_POLICY_SECTIONS, FourD4yPrivacyPolicySection } from '../domain/privacy/FourD4yPrivacyPolicy';
+import { FOUR_D4Y_PRIVACY_CONTACT, FOUR_D4Y_PRIVACY_POLICY_UPDATED_AT,
+  FOUR_D4Y_PRIVACY_POLICY_SECTIONS, FourD4yPrivacyPolicySection } from '../domain/privacy/FourD4yPrivacyPolicy';
 
 @Entry
 @Component
@@ -50,6 +51,7 @@ struct Index {
   @StorageLink('hipdaoh_privacy_accepted') privacyAccepted: boolean = false;
   @State privacyReady: boolean = false;
   @State isAcceptingPrivacyPolicy: boolean = false;
+  @State isRejectingPrivacyPolicy: boolean = false;
   @State privacyErrorMessage: string = '';
   @State isPolicyDetailVisible: boolean = false;
   private isIndexAlive: boolean = false;
@@ -159,7 +161,8 @@ struct Index {
             this.isPolicyDetailVisible = !this.isPolicyDetailVisible;
           });
         if (this.isPolicyDetailVisible) {
-          Text('开发者：sis5595；联系邮箱：sis5595@hotmail.com；更新日期：2026 年 10 月 7 日。')
+          Text('开发者：sis5595；联系邮箱：' + FOUR_D4Y_PRIVACY_CONTACT +
+            '；更新日期：' + FOUR_D4Y_PRIVACY_POLICY_UPDATED_AT + '。')
             .fontSize(13)
             .fontColor($r('app.color.text_secondary'))
             .width('100%')
@@ -181,15 +184,20 @@ struct Index {
           .fontSize(16)
           .fontColor($r('app.color.on_brand'))
           .backgroundColor($r('app.color.brand'))
-          .enabled(!this.isAcceptingPrivacyPolicy)
+          .enabled(!this.isAcceptingPrivacyPolicy && !this.isRejectingPrivacyPolicy)
           .onClick(() => {
             void this.acceptPrivacyPolicy();
           });
-        Text('暂不同意')
+        Button(this.isRejectingPrivacyPolicy ? '正在退出…' : '不同意并退出')
           .fontSize(14)
           .fontColor($r('app.color.text_secondary'))
           .width('100%')
-          .textAlign(TextAlign.Center);
+          .backgroundColor($r('app.color.fill_subtle'))
+          .height(44)
+          .enabled(!this.isAcceptingPrivacyPolicy && !this.isRejectingPrivacyPolicy)
+          .onClick(() => {
+            void this.rejectPrivacyPolicy();
+          });
         Text('未同意前，应用不会进入论坛或读取已保存帐号。你可以关闭应用，或稍后再同意。')
           .fontSize(12)
           .fontColor($r('app.color.text_muted'))
@@ -246,7 +254,7 @@ struct Index {
   }
 
   private async acceptPrivacyPolicy(): Promise<void> {
-    if (!this.isIndexAlive || this.isAcceptingPrivacyPolicy) {
+    if (!this.isIndexAlive || this.isAcceptingPrivacyPolicy || this.isRejectingPrivacyPolicy) {
       return;
     }
     this.privacyErrorMessage = '';
@@ -274,6 +282,25 @@ struct Index {
       this.privacyErrorMessage = '无法保存你的选择，请稍后重试。';
     }
     this.isAcceptingPrivacyPolicy = false;
+  }
+
+  private async rejectPrivacyPolicy(): Promise<void> {
+    if (!this.isIndexAlive || this.isAcceptingPrivacyPolicy || this.isRejectingPrivacyPolicy) {
+      return;
+    }
+    this.isRejectingPrivacyPolicy = true;
+    this.privacyErrorMessage = '';
+    // Keep the gate closed even if terminating the ability fails. No account or Web is started.
+    AppStorage.set<boolean>('hipdaoh_privacy_accepted', false);
+    try {
+      const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      await context.terminateSelf();
+    } catch (_error) {
+      if (this.isIndexAlive) {
+        this.privacyErrorMessage = '未同意隐私政策，论坛功能保持关闭。退出失败，请返回桌面或重试。';
+        this.isRejectingPrivacyPolicy = false;
+      }
+    }
   }
 
 }

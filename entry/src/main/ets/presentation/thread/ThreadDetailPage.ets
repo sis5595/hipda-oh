@@ -13,6 +13,7 @@ import { WebRouteState } from '../web/WebRouteState';
 import { ImageViewerItem, ImageViewerRouteState } from '../image/ImageViewerRouteState';
 import { createThreadRouteParams, ThreadRouteParams } from './ThreadRouteState';
 import { createUserProfileRouteParams } from '../profile/UserProfileRouteState';
+import { buildFourD4yAvatarUrl } from '../../domain/profile/FourD4yAvatar';
 import { createEditComposerRouteParams, createQuoteComposerRouteParams, createReplyComposerRouteParams,
   isForumComposerPostEditedResult, isForumComposerReplyPublishedResult } from '../composer/ForumComposerRouteState';
 import { FourD4ySession } from '../../data/remote/FourD4ySession';
@@ -1111,6 +1112,22 @@ export struct ThreadDetailPage {
   @Builder
   private buildPostCardBody(post: ThreadPost) {
     Row() {
+      if (!this.isPostHiddenByBlacklist(post)) {
+        // Key by URL so a changed author cannot retain an earlier successful Image source.
+        ForEach([buildFourD4yAvatarUrl(post.authorUserId)], (avatarUrl: string) => {
+          Image(avatarUrl.length > 0 ? avatarUrl : $r('app.media.avatar_default'))
+            .alt($r('app.media.avatar_default'))
+            .width(36)
+            .height(36)
+            .objectFit(ImageFit.Cover)
+            .borderRadius(4)
+            .margin({ right: 8 })
+            .onClick(() => {
+              this.openUserProfile(post);
+            })
+            .monopolizeEvents(true)
+        }, (avatarUrl: string) => avatarUrl)
+      }
       if (this.isPostHiddenByBlacklist(post)) {
         Text('黑名单用户')
           .fontSize(16)
@@ -1120,13 +1137,18 @@ export struct ThreadDetailPage {
         Text(post.authorName)
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
           .fontColor(this.canOpenUserProfile(post) ? $r('app.color.brand') : $r('app.color.text_primary'))
           .onClick(() => {
             this.openUserProfile(post);
           })
           .monopolizeEvents(true)
       }
-      Blank()
+      if (this.isPostHiddenByBlacklist(post) || post.authorName.length === 0) {
+        Blank()
+      }
       if (post.publishedAt !== undefined && post.publishedAt.length > 0) {
         Text(post.publishedAt)
           .fontSize(12)
