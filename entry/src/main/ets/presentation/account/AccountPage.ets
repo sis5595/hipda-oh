@@ -95,7 +95,7 @@ export struct AccountPage {
         .fontSize(15)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'));
-      Text('密码仅在 4D4Y 网页中输入，不会经过本应用。已验证的会话由系统安全资产库加密保存；卸载应用会一并移除。')
+      Text('登录表单由 4D4Y 直接处理，本应用不读取或保存密码。已验证的会话由系统安全资产库加密保存；卸载应用会一并移除。')
         .fontSize(12)
         .fontColor($r('app.color.text_secondary'))
         .lineHeight(20);

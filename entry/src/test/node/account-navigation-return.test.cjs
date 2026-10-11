@@ -34,7 +34,10 @@ const login = load('login/LoginPage.ets', 'closeLoginPage', 'LoginPagePopResult'
 login.pathStack = stack;
 login.clearLoadWatchdog = () => {};
 login.verificationSequence = 10;
+login.isPageActive = true;
 assert.equal(login.closeLoginPage(), true);
 assert.equal(login.verificationSequence, 11, 'cancel stale verification before navigation');
 assert.equal(returns, 2, 'cancel/Back releases the account page through the same return callback');
+assert.equal(login.closeLoginPage(), true);
+assert.equal(returns, 2, 'queued backdrop/Back cannot pop the underlying account page twice');
 console.log('Account and login native Back return results and in-flight switching guard passed.');

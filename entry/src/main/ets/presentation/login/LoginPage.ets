@@ -10,6 +10,7 @@ import { FourD4yAttentionState } from '../../domain/attention/FourD4yAttentionSt
 import { common } from '@kit.AbilityKit';
 import { buildFourD4yAccountIdentityScript } from '../../domain/account/FourD4yAccountIdentityScript';
 import { LoginRouteParams } from './LoginRouteState';
+import { buildFourD4yLoginPresentationScript } from './FourD4yLoginPresentation';
 
 class LoginPagePopResult {
   changed: boolean = true;
@@ -24,10 +25,12 @@ export struct LoginPage {
   @Consume('unreadState') unreadState: FourD4yUnreadState;
   @Consume('favoriteState') favoriteState: FourD4yFavoriteState;
   @Consume('attentionState') attentionState: FourD4yAttentionState;
-  @State status: string = '请直接在 4D4Y 页面完成完整站点登录，账号和密码不会经过 HiPDA。';
+  @State status: string = '正在准备登录…';
   @State rejectedSession: boolean = false;
   @State isVerifying: boolean = true;
   @State loadFailed: boolean = false;
+  @State compactLogin: boolean = true;
+  @State presentationReady: boolean = false;
 
   private readonly controller: webview.WebviewController = new webview.WebviewController();
   private readonly loginUrl: string = FourD4ySession.forumRoot + 'logging.php?action=login';
@@ -57,62 +60,106 @@ export struct LoginPage {
 
   build() {
     NavDestination() {
-      Column() {
-        Row({ space: 12 }) {
-          Text(this.status)
-            .fontSize(13)
-            .fontColor(this.isLoggedIn ? $r('app.color.success_text') : $r('app.color.text_secondary'))
-            .layoutWeight(1)
-            .maxLines(2)
-
-          if (this.loadFailed) {
-            Button('重试')
-              .fontSize(14)
-              .onClick(() => this.retryLoginPage())
-          } else if (!this.isLoggedIn && this.rejectedSession) {
-            Button('重新登录')
-              .fontSize(14)
-              .enabled(!this.isVerifying)
-              .onClick(() => {
-                this.startNewLogin();
-              })
+      Stack() {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#99000000')
+          .onClick(() => this.closeLoginPage())
+        Column() {
+          if (!this.compactLogin) {
+            Row() {
+              Text('4D4Y 登录 / 安全验证').fontSize(15).layoutWeight(1)
+              Text('关闭').fontSize(14).onClick(() => this.closeLoginPage())
+            }
+            .width('100%')
+            .padding(14)
           }
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-        .backgroundColor(this.isLoggedIn ? $r('app.color.success_background') : $r('app.color.canvas'))
+          if (this.loadFailed || this.rejectedSession || this.accountSaveStatus.length > 0 || !this.compactLogin) {
+            Row({ space: 12 }) {
+              Text(this.status)
+                .fontSize(13)
+                .fontColor(this.isLoggedIn ? $r('app.color.success_text') : $r('app.color.text_secondary'))
+                .layoutWeight(1)
+                .maxLines(2)
 
-        Web({ src: '', controller: this.controller })
-          .javaScriptAccess(true)
-          .domStorageAccess(true)
-          .onlineImageAccess(true)
-          .onControllerAttached(() => {
-            this.onControllerAttached();
-          })
-          .onPageEnd((event) => {
-            this.finishLoginLoad(event.url);
-          })
-          .onPageBegin((event) => {
-            this.beginLoginLoad(event.url);
-          })
-          .onErrorReceive((event) => {
-            if (event.request.isMainFrame()) {
-              this.failLoginLoad(event.request.getRequestUrl());
+              if (this.loadFailed) {
+                Button('重试')
+                  .fontSize(14)
+                  .onClick(() => this.retryLoginPage())
+              } else if (!this.isLoggedIn && this.rejectedSession) {
+                Button('重新登录')
+                  .fontSize(14)
+                  .enabled(!this.isVerifying)
+                  .onClick(() => {
+                    this.startNewLogin();
+                  })
+              }
             }
-          })
-          .onHttpErrorReceive((event) => {
-            if (event.request.isMainFrame() && event.response.getResponseCode() >= 400) {
-              this.failLoginLoad(event.request.getRequestUrl());
+            .width('100%')
+            .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+            .backgroundColor(this.isLoggedIn ? $r('app.color.success_background') : $r('app.color.canvas'))
+          }
+
+          Stack() {
+            Web({ src: '', controller: this.controller })
+              .javaScriptAccess(true)
+              .domStorageAccess(true)
+              .onlineImageAccess(true)
+              // Full-site UA is needed for shared authentication, but it has no
+              // Mobile marker. Enable viewport instead of changing login UA.
+              .metaViewport(true)
+              .onControllerAttached(() => {
+                this.onControllerAttached();
+              })
+              .onPageEnd((event) => {
+                this.finishLoginLoad(event.url);
+              })
+              .onPageBegin((event) => {
+                this.beginLoginLoad(event.url);
+              })
+              .onErrorReceive((event) => {
+                if (event.request.isMainFrame()) {
+                  this.failLoginLoad(event.request.getRequestUrl());
+                }
+              })
+              .onHttpErrorReceive((event) => {
+                if (event.request.isMainFrame() && event.response.getResponseCode() >= 400) {
+                  this.failLoginLoad(event.request.getRequestUrl());
+                }
+              })
+              .width('100%')
+              .height('100%')
+              .opacity(this.presentationReady ? 1 : 0)
+              .hitTestBehavior(this.presentationReady ? HitTestMode.Default : HitTestMode.None)
+            if (!this.presentationReady && !this.loadFailed) {
+              Column({ space: 12 }) {
+                LoadingProgress().width(28).height(28)
+                Text(this.status).fontSize(14).fontColor($r('app.color.text_secondary')).maxLines(3)
+              }
+              .padding(20)
             }
-          })
+          }
           .width('100%')
           .layoutWeight(1)
+          if (this.isLoggedIn && !this.isVerifying && !this.loadFailed) {
+            this.buildTitleActions();
+          }
+        }
+        .width(this.compactLogin ? '78%' : '94%')
+        .constraintSize({ maxWidth: this.compactLogin ? 360 : 10000 })
+        .height(this.compactLogin ? 346 : '94%')
+        .backgroundColor(Color.White)
+        .borderRadius(2)
+        .clip(true)
+        .shadow({ radius: 16, color: '#33000000', offsetY: 8 })
       }
       .width('100%')
       .height('100%')
     }
-    .title('登录 4D4Y')
-    .menus(this.buildTitleActions)
+    .mode(NavDestinationMode.DIALOG)
+    .hideTitleBar(true)
+    .backgroundColor(Color.Transparent)
     .onBackPressed(() => this.closeLoginPage())
     .onReady((context: NavDestinationContext) => {
       const route: LoginRouteParams | null = context.pathInfo.param as LoginRouteParams | null;
@@ -137,6 +184,7 @@ export struct LoginPage {
   }
 
   private closeLoginPage(): boolean {
+    if (!this.isPageActive) return true;
     this.isPageActive = false;
     this.clearLoadWatchdog();
     this.verificationSequence++;
@@ -158,6 +206,7 @@ export struct LoginPage {
     this.clearLoadWatchdog();
     this.loadingUrl = url;
     this.loadFailed = false;
+    this.presentationReady = false;
     this.isVerifying = true;
     this.verificationSequence++;
     const sequence: number = ++this.loadSequence;
@@ -172,10 +221,25 @@ export struct LoginPage {
     }, 30000);
   }
 
-  private finishLoginLoad(url: string): void {
+  private async finishLoginLoad(url: string): Promise<void> {
     if (!this.isPageActive || this.loadFailed || url !== this.loadingUrl) return;
     this.clearLoadWatchdog();
-    this.refreshLoginState();
+    const sequence: number = this.loadSequence;
+    let compact: boolean = false;
+    try {
+      const result: string = await this.controller.runJavaScript(buildFourD4yLoginPresentationScript());
+      compact = result === 'compact' || result === '"compact"';
+    } catch (_error) {
+      // Unknown templates and challenges remain usable in the forum fallback.
+    }
+    if (!this.isPageActive || this.loadFailed || url !== this.loadingUrl || sequence !== this.loadSequence) return;
+    await this.refreshLoginState();
+    if (this.isPageActive && !this.loadFailed && url === this.loadingUrl && sequence === this.loadSequence) {
+      // Verified login closes above. Do not expand to a desktop-page fallback
+      // for the brief interval while its account/session is being checked.
+      this.compactLogin = compact;
+      this.presentationReady = true;
+    }
   }
 
   private failLoginLoad(url: string): void {
@@ -184,6 +248,7 @@ export struct LoginPage {
     this.verificationSequence++;
     this.isVerifying = false;
     this.loadFailed = true;
+    this.presentationReady = false;
     // A transport error does not prove logout. Keep cookies and account state.
     this.status = '登录页加载失败或超时，请检查网络后重试；不会自动重复提交登录。';
   }
@@ -311,10 +376,13 @@ export struct LoginPage {
     this.rejectedSession = hasSessionCookie && scriptExecuted && !loggedIn;
     if (loggedIn) {
       this.status = this.accountSaveStatus || '登录成功，完整站点会话已保存在本应用内。';
+      if (this.isPageActive && this.accountSaveStatus.length === 0) {
+        this.closeLoginPage();
+      }
     } else if (hasSessionCookie) {
       this.status = scriptExecuted ? '当前会话不是完整站点会话，请重新登录一次。' : '正在核验 4D4Y 登录会话…';
     } else {
-      this.status = '请直接在 4D4Y 页面完成完整站点登录，账号和密码不会经过 HiPDA。';
+      this.status = '请填写用户名、密码及安全提问（如有）。';
     }
   }
 
@@ -363,7 +431,7 @@ export struct LoginPage {
       this.hasSavedAccountSession = false;
       this.accountSaveStatus = '';
       this.rejectedSession = false;
-      this.status = '请直接在 4D4Y 页面完成完整站点登录，账号和密码不会经过 HiPDA。';
+      this.status = '正在准备登录…';
       this.retryLoginPage();
     } catch (_error) {
       if (sequence === this.verificationSequence) {

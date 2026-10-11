@@ -37,7 +37,7 @@
 
 ## 隐私与反馈
 
-应用没有广告和统计 SDK。登录在论坛页面完成，已保存账号的会话由鸿蒙系统安全存储保护；具体说明见[隐私政策](docs/PRIVACY_POLICY.md)。
+应用没有广告和统计 SDK，不读取或保存论坛密码。已保存账号的会话由鸿蒙系统安全存储保护；具体说明见[隐私政策](docs/PRIVACY_POLICY.md)。
 
 遇到问题可在 [Issues](https://github.com/sis5595/hipda-oh/issues) 中反馈，说明操作步骤、手机型号和系统版本。截图前请遮住私信、账号等个人信息。联系邮箱：sis5595@gmail.com。
 
