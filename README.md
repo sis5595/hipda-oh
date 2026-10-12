@@ -6,11 +6,11 @@
 
 ## 当前状态
 
-**1.0.0-beta.2 · 测试版（待发布）**
+**1.0.0-beta.2 · 测试版**
 
 主要日常功能已实现，并在 Mate 60 上完成了一轮回归测试。仍欢迎在实际使用中反馈问题，尤其是论坛页面变化或与 NG 体验不一致的地方。
 
-主要下载渠道是 [GitHub Releases](https://github.com/sis5595/hipda-oh/releases) 中的 HAP 安装包。本次 Beta 安装包正在做发布前复审；以 Releases 实际附件为准，尚无 HAP 附件的源码版本不能直接安装。
+主要下载渠道是 [GitHub Releases](https://github.com/sis5595/hipda-oh/releases) 中的 HAP 安装包。请下载 `hipda-oh-1.0.0-beta.2-unsigned.hap` 附件，源码 ZIP 不能直接安装。
 
 **目前尚未上架应用商店，现阶段只能侧载。** 项目正在积极准备上架境外华为 AppGallery，希望未来可通过海外商店正常下载安装和更新，但不承诺具体日期。
 
