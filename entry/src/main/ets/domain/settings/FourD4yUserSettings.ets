@@ -1,4 +1,6 @@
 import { FOUR_D4Y_QUICK_FORUM_IDS, getFourD4yForums } from '../catalog/FourD4yForumCatalog';
+import { FOUR_D4Y_DEFAULT_POST_TAIL_TEXT, FOUR_D4Y_DEFAULT_POST_TAIL_URL, FourD4yPostTailSettings,
+  normalizeFourD4yPostTailText, normalizeFourD4yPostTailUrl } from './FourD4yPostTail';
 
 /** Appearance choices intentionally mirror the three choices exposed by MY 4D4Y. */
 export enum FourD4yThemeMode {
@@ -13,7 +15,7 @@ export enum FourD4yImageLoadPolicy {
   TapToLoad = 'tap'
 }
 
-export interface FourD4yUserSettings {
+export interface FourD4yUserSettings extends FourD4yPostTailSettings {
   themeMode: FourD4yThemeMode;
   fontScale: number;
   /** Multiplier applied only to readable post-body and quote line heights. */
@@ -40,7 +42,10 @@ export function createDefaultFourD4yUserSettings(): FourD4yUserSettings {
     imageLoadPolicy: FourD4yImageLoadPolicy.Automatic,
     quickForumIds: [...FOUR_D4Y_QUICK_FORUM_IDS],
     showPinnedThreads: true,
-    postTimeSortForumIds: []
+    postTimeSortForumIds: [],
+    addPostTail: false,
+    postTailText: FOUR_D4Y_DEFAULT_POST_TAIL_TEXT,
+    postTailUrl: FOUR_D4Y_DEFAULT_POST_TAIL_URL
   };
 }
 
@@ -60,7 +65,10 @@ export function parseFourD4yUserSettings(rawValue: string): FourD4yUserSettings 
       imageLoadPolicy: normalizeFourD4yImageLoadPolicy(value['imageLoadPolicy']),
       quickForumIds: normalizeFourD4yQuickForumIds(value['quickForumIds']),
       showPinnedThreads: normalizeFourD4yShowPinnedThreads(value['showPinnedThreads']),
-      postTimeSortForumIds: normalizeFourD4yPostTimeSortForumIds(value['postTimeSortForumIds'])
+      postTimeSortForumIds: normalizeFourD4yPostTimeSortForumIds(value['postTimeSortForumIds']),
+      addPostTail: value['addPostTail'] === true,
+      postTailText: normalizeFourD4yPostTailText(value['postTailText']),
+      postTailUrl: normalizeFourD4yPostTailUrl(value['postTailUrl'])
     };
   } catch (_error) {
     return defaults;
@@ -80,7 +88,10 @@ export function normalizeFourD4yUserSettings(settings: FourD4yUserSettings): Fou
     imageLoadPolicy: normalizeFourD4yImageLoadPolicy(settings.imageLoadPolicy),
     quickForumIds: normalizeFourD4yQuickForumIds(settings.quickForumIds),
     showPinnedThreads: normalizeFourD4yShowPinnedThreads(settings.showPinnedThreads),
-    postTimeSortForumIds: normalizeFourD4yPostTimeSortForumIds(settings.postTimeSortForumIds)
+    postTimeSortForumIds: normalizeFourD4yPostTimeSortForumIds(settings.postTimeSortForumIds),
+    addPostTail: settings.addPostTail === true,
+    postTailText: normalizeFourD4yPostTailText(settings.postTailText),
+    postTailUrl: normalizeFourD4yPostTailUrl(settings.postTailUrl)
   };
 }
 
@@ -97,7 +108,10 @@ export function mergeFourD4yUserSettingsChanges(current: FourD4yUserSettings,
     showPinnedThreads: next.showPinnedThreads !== before.showPinnedThreads ?
       next.showPinnedThreads : current.showPinnedThreads,
     postTimeSortForumIds: JSON.stringify(next.postTimeSortForumIds) !== JSON.stringify(before.postTimeSortForumIds) ?
-      next.postTimeSortForumIds : current.postTimeSortForumIds
+      next.postTimeSortForumIds : current.postTimeSortForumIds,
+    addPostTail: next.addPostTail !== before.addPostTail ? next.addPostTail : current.addPostTail,
+    postTailText: next.postTailText !== before.postTailText ? next.postTailText : current.postTailText,
+    postTailUrl: next.postTailUrl !== before.postTailUrl ? next.postTailUrl : current.postTailUrl
   });
 }
 

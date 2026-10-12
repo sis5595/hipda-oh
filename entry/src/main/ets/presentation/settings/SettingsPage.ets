@@ -6,6 +6,9 @@ import { FOUR_D4Y_FONT_SCALES, FOUR_D4Y_MAX_QUICK_FORUMS, FOUR_D4Y_POST_LINE_SPA
 import { ForumSummary } from '../../domain/model/ForumModels';
 import { getFourD4yForums } from '../../domain/catalog/FourD4yForumCatalog';
 import { createBlacklistRouteParams } from '../blacklist/BlacklistRouteState';
+import { FOUR_D4Y_DEFAULT_POST_TAIL_TEXT, FOUR_D4Y_DEFAULT_POST_TAIL_URL,
+  FOUR_D4Y_MAX_POST_TAIL_TEXT, FOUR_D4Y_MAX_POST_TAIL_URL,
+  normalizeFourD4yPostTailUrl } from '../../domain/settings/FourD4yPostTail';
 
 class SettingsPagePopResult {
   changed: boolean = true;
@@ -19,6 +22,8 @@ export struct SettingsPage {
   @State statusMessage: string = '';
   @State isSaving: boolean = false;
   @State hasLoadedSettings: boolean = false;
+  @State postTailTextDraft: string = FOUR_D4Y_DEFAULT_POST_TAIL_TEXT;
+  @State postTailUrlDraft: string = FOUR_D4Y_DEFAULT_POST_TAIL_URL;
   private isSettingsPageAlive: boolean = false;
 
   private readonly forums: ForumSummary[] = getFourD4yForums();
@@ -43,7 +48,11 @@ export struct SettingsPage {
           Divider().color($r('app.color.border'));
           this.buildForumSettingsSection();
           Divider().color($r('app.color.border'));
+          this.buildPostTailSection();
+          Divider().color($r('app.color.border'));
           this.buildPrivacySection();
+          Divider().color($r('app.color.border'));
+          this.buildAboutSection();
           Divider().color($r('app.color.border'));
           this.buildQuickForumsSection();
           if (!this.isLoading && !this.hasLoadedSettings) {
@@ -222,6 +231,75 @@ export struct SettingsPage {
   }
 
   @Builder
+  private buildPostTailSection() {
+    Column({ space: 10 }) {
+      this.buildSectionTitle('小尾巴');
+      Row({ space: 12 }) {
+        Text('发帖添加小尾巴')
+          .fontSize(16)
+          .fontColor($r('app.color.text_primary'))
+          .layoutWeight(1);
+        Toggle({ type: ToggleType.Switch, isOn: this.settings.addPostTail })
+          .enabled(this.hasLoadedSettings && !this.isLoading && !this.isSaving)
+          .onChange((enabled: boolean) => {
+            const next: FourD4yUserSettings = normalizeFourD4yUserSettings(this.settings);
+            next.addPostTail = enabled;
+            void this.updateSettings(next);
+          });
+      }.width('100%');
+      Text('用于新主题、普通回复和引用回复；编辑已有帖子及私信不会自动追加。默认关闭。')
+        .fontSize(12).fontColor($r('app.color.text_secondary')).width('100%');
+      TextInput({ placeholder: '尾巴文字', text: this.postTailTextDraft })
+        .maxLength(FOUR_D4Y_MAX_POST_TAIL_TEXT)
+        .enabled(this.hasLoadedSettings && !this.isLoading && !this.isSaving)
+        .onChange((value: string) => { this.postTailTextDraft = value; });
+      TextInput({ placeholder: '尾巴链接（可留空）', text: this.postTailUrlDraft })
+        .maxLength(FOUR_D4Y_MAX_POST_TAIL_URL)
+        .enabled(this.hasLoadedSettings && !this.isLoading && !this.isSaving)
+        .onChange((value: string) => { this.postTailUrlDraft = value; });
+      Button('保存小尾巴')
+        .fontSize(14)
+        .enabled(this.hasLoadedSettings && !this.isLoading && !this.isSaving)
+        .onClick(() => { void this.savePostTail(); });
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ left: 16, right: 16, top: 14, bottom: 14 })
+    .backgroundColor($r('app.color.surface'));
+  }
+
+  @Builder
+  private buildAboutSection() {
+    Row({ space: 10 }) {
+      Column({ space: 3 }) {
+        Text('关于 HiPDA·OH').fontSize(16).fontColor($r('app.color.text_primary'));
+        Text('版本号、项目地址、反馈与致谢').fontSize(13).fontColor($r('app.color.text_secondary'));
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start);
+      Text('›').fontSize(24).fontColor($r('app.color.text_muted'));
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 18, bottom: 18 })
+    .backgroundColor($r('app.color.surface'))
+    .onClick(() => { this.pathStack.pushPathByName('About', null); });
+  }
+
+  private async savePostTail(): Promise<void> {
+    if (this.postTailTextDraft.trim().length === 0) {
+      this.statusMessage = '保存失败：小尾巴文字不能为空。';
+      return;
+    }
+    const url: string = normalizeFourD4yPostTailUrl(this.postTailUrlDraft);
+    if (this.postTailUrlDraft.trim().length > 0 && url.length === 0) {
+      this.statusMessage = '保存失败：小尾巴链接须为 http 或 https 地址，不能包含账号、空白或 BBCode。';
+      return;
+    }
+    const next: FourD4yUserSettings = normalizeFourD4yUserSettings(this.settings);
+    next.postTailText = this.postTailTextDraft;
+    next.postTailUrl = url;
+    await this.updateSettings(next);
+  }
+
+  @Builder
   private buildPrivacySection() {
     Column({ space: 8 }) {
       this.buildSectionTitle('隐私');
@@ -375,6 +453,8 @@ export struct SettingsPage {
         return;
       }
       this.settings = settings;
+      this.postTailTextDraft = settings.postTailText;
+      this.postTailUrlDraft = settings.postTailUrl;
       this.hasLoadedSettings = true;
     } catch (_error) {
       if (!this.isSettingsPageAlive) {
@@ -428,7 +508,10 @@ export struct SettingsPage {
       imageLoadPolicy: this.settings.imageLoadPolicy,
       quickForumIds: [...this.settings.quickForumIds],
       showPinnedThreads: this.settings.showPinnedThreads,
-      postTimeSortForumIds: [...this.settings.postTimeSortForumIds]
+      postTimeSortForumIds: [...this.settings.postTimeSortForumIds],
+      addPostTail: this.settings.addPostTail,
+      postTailText: this.settings.postTailText,
+      postTailUrl: this.settings.postTailUrl
     };
   }
 
@@ -440,7 +523,10 @@ export struct SettingsPage {
       imageLoadPolicy: this.settings.imageLoadPolicy,
       quickForumIds: [...this.settings.quickForumIds],
       showPinnedThreads: this.settings.showPinnedThreads,
-      postTimeSortForumIds: [...this.settings.postTimeSortForumIds]
+      postTimeSortForumIds: [...this.settings.postTimeSortForumIds],
+      addPostTail: this.settings.addPostTail,
+      postTailText: this.settings.postTailText,
+      postTailUrl: this.settings.postTailUrl
     };
   }
 
@@ -452,7 +538,10 @@ export struct SettingsPage {
       imageLoadPolicy: imageLoadPolicy,
       quickForumIds: [...this.settings.quickForumIds],
       showPinnedThreads: this.settings.showPinnedThreads,
-      postTimeSortForumIds: [...this.settings.postTimeSortForumIds]
+      postTimeSortForumIds: [...this.settings.postTimeSortForumIds],
+      addPostTail: this.settings.addPostTail,
+      postTailText: this.settings.postTailText,
+      postTailUrl: this.settings.postTailUrl
     };
   }
 
@@ -464,7 +553,10 @@ export struct SettingsPage {
       imageLoadPolicy: this.settings.imageLoadPolicy,
       quickForumIds: [...quickForumIds],
       showPinnedThreads: this.settings.showPinnedThreads,
-      postTimeSortForumIds: [...this.settings.postTimeSortForumIds]
+      postTimeSortForumIds: [...this.settings.postTimeSortForumIds],
+      addPostTail: this.settings.addPostTail,
+      postTailText: this.settings.postTailText,
+      postTailUrl: this.settings.postTailUrl
     };
   }
 
@@ -489,7 +581,10 @@ export struct SettingsPage {
       imageLoadPolicy: this.settings.imageLoadPolicy,
       quickForumIds: [...this.settings.quickForumIds],
       showPinnedThreads: this.settings.showPinnedThreads,
-      postTimeSortForumIds: [...this.settings.postTimeSortForumIds]
+      postTimeSortForumIds: [...this.settings.postTimeSortForumIds],
+      addPostTail: this.settings.addPostTail,
+      postTailText: this.settings.postTailText,
+      postTailUrl: this.settings.postTailUrl
     };
   }
 

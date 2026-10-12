@@ -24,16 +24,18 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { target: ts.Scri
   module: ts.ModuleKind.CommonJS } }).outputText, { exports: output,
   ReplyWebOperation: modes, QuickReplyMode: { Thread: 'thread', Quote: 'quote' },
   parseReplyPreflightPayload: value => value, isExpectedReplyPreflightPayload: () => true,
+  FourD4yUserSettingsStore: { load: async () => ({ addPostTail: false }) },
   FourD4yPageAccessState: { LoginRequired: 'login' } });
 function reader() {
   let ready, posts = 0;
   const instance = new output.Reader();
   Object.assign(instance, {
-    isThreadPageAlive: true, isReplyComposerVisible: true, isReplySubmitting: false,
+    isThreadPageAlive: true, isReplyComposerVisible: true, isReplySubmitting: false, isReplyPreflightLoading: true,
     replyPreflightSequence: 1, replySubmissionSequence: 1, readingReplyPreflightSequence: -1,
     replyWebOperation: 'submit', pendingReplyDraft: 'test reply', route: { threadId: '123' },
     getReplyPreflightExtractionScript: () => 'preflight', getReplySubmissionScript: () => 'submit',
     startReplySubmissionWatchdog: () => {},
+    getUIContext: () => ({ getHostContext: () => ({}) }),
     replyWebController: { runJavaScript: script => {
       if (script === 'submit') { posts++; return Promise.resolve(''); }
       return new Promise(resolve => { ready = resolve; });

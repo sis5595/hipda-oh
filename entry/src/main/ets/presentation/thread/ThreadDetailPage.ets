@@ -45,6 +45,7 @@ import { FourD4yVotePreflightPayload, FourD4yVoteSubmissionStartPayload,
   parseFourD4yVoteVerificationPayload } from '../../domain/poll/FourD4yPollContracts';
 import { FourD4yUserSettingsStore } from '../../data/local/FourD4yUserSettingsStore';
 import { FourD4yImageLoadPolicy, FourD4yUserSettings } from '../../domain/settings/FourD4yUserSettings';
+import { appendFourD4yPostTail } from '../../domain/settings/FourD4yPostTail';
 import { FourD4yReadHistoryEntry } from '../../domain/history/FourD4yReadHistory';
 import { FourD4yReadHistoryState } from '../../domain/history/FourD4yReadHistoryState';
 import { createFourD4yAttachmentFileName, isAllowedFourD4yAttachmentDownloadUrl } from
@@ -227,6 +228,7 @@ export struct ThreadDetailPage {
   private replySubmissionSequence: number = 0;
   private replyWebOperation: ReplyWebOperation = ReplyWebOperation.Preflight;
   private pendingReplyDraft: string = '';
+  private postTailSettings: FourD4yUserSettings | undefined = undefined;
   private readingReplyPreflightSequence: number = -1;
   private readonly quickReplyInputId: string = 'hipda-oh-quick-reply-input';
   private quickReplySendLongPressed: boolean = false;
@@ -369,6 +371,7 @@ export struct ThreadDetailPage {
     this.pollActionMessage = '';
     this.loadedPostImageUrls = [];
     this.viewerUserId = '';
+    this.postTailSettings = undefined;
     this.authorOnlyUserId = '';
     this.threadAuthorUserId = '';
     this.threadAuthorName = '';
@@ -2751,7 +2754,11 @@ export struct ThreadDetailPage {
   }
 
   private canEditPost(post: ThreadPost): boolean {
-    return this.canRequestPostDeletion(post);
+    // NG allows editing by viewer/post identity. A notification, search or
+    // favorite route may not yet know fid; the editor obtains a fresh form
+    // for this exact tid/pid rather than inheriting deletion's fid contract.
+    return this.isPostOwnedByCurrentViewer(post) && /^\d{1,20}$/.test(post.id) &&
+      /^\d{1,20}$/.test(this.route.threadId);
   }
 
   private getPostDeletionButtonLabel(post: ThreadPost): string {
@@ -3224,6 +3231,11 @@ export struct ThreadDetailPage {
         this.failReplyPreflight('4D4Y 回复表单结构尚未通过校验，未启用发送。');
         return;
       }
+      const context: common.Context = this.getUIContext().getHostContext() as common.Context;
+      const settings: FourD4yUserSettings = await FourD4yUserSettingsStore.load(context);
+      if (!this.isThreadPageAlive || !this.isReplyComposerVisible || !this.isReplyPreflightLoading ||
+        expectedSequence !== this.replyPreflightSequence || expectedThreadId !== this.route.threadId) return;
+      this.postTailSettings = settings;
       this.clearReplyPreflightWatchdog();
       this.isReplyPreflightLoading = false;
       if (this.replyWebOperation === ReplyWebOperation.Submit) {
@@ -3251,7 +3263,7 @@ export struct ThreadDetailPage {
     }
     this.replySubmissionSequence += 1;
     this.replySubmissionErrorMessage = '';
-    this.pendingReplyDraft = draft;
+    this.pendingReplyDraft = appendFourD4yPostTail(draft, this.postTailSettings);
     this.isReplyFormReady = false;
     this.replyPreflightMessage = '正在重新获取一次性回复表单…';
     this.prepareReplyForm(ReplyWebOperation.Submit);
@@ -3894,6 +3906,11 @@ export struct ThreadDetailPage {
         }
       }
       this.selectedPage = this.currentPage;
+      if (payload.forumId !== undefined && /^\d{1,20}$/.test(payload.forumId)) {
+        // Like NG, resolve the actual board from the trusted page breadcrumb.
+        // Do not infer it from links embedded in a user's post or quote.
+        this.route.forumId = payload.forumId;
+      }
       if (payload.title.length > 0) {
         this.resolvedTitle = payload.title;
       }
@@ -5287,6 +5304,16 @@ export struct ThreadDetailPage {
       '    return values.filter((item) => item.kind !== "text" || item.value.length > 0);',
       '  };',
       '  const params = new URLSearchParams(location.search);',
+      '  let forumId = "";',
+      '  const forumLinks = Array.from(document.querySelectorAll("#nav a[href]"));',
+      '  for (const link of forumLinks) {',
+      '    if (link.closest("[id^=post_], [id^=pid], [id^=postmessage_], .quote, .signatures")) continue;',
+      '    try {',
+      '      const target = new URL((link.getAttribute("href") || "").replace(/&amp;/g, "&"), location.href);',
+      '      const fid = target.searchParams.get("fid") || "";',
+      '      if (target.origin === "https://www.4d4y.com" && !target.username && !target.password && target.pathname === "/forum/forumdisplay.php" && target.searchParams.getAll("fid").length === 1 && /^\\d{1,20}$/.test(fid)) { forumId = fid; break; }',
+      '    } catch (_) {}',
+      '  }',
       '  const currentUserLink = document.querySelector("#umenu > cite > a[href], #umenu cite a[href]");',
       '  const currentUserHref = currentUserLink ? (currentUserLink.getAttribute("href") || "") : "";',
       '  const currentUserMatch = /(?:[?&]uid=|uid-)([0-9]+)/.exec(currentUserHref);',
@@ -5432,6 +5459,7 @@ export struct ThreadDetailPage {
       '  const currentMatch = /\\d+/.exec(toText(document.querySelector(".pages strong")));',
       '  return JSON.stringify({',
       '    threadId: params.get("tid") || "",',
+      '    forumId: forumId,',
       '    viewerUserId: currentUserMatch ? currentUserMatch[1] : (scriptUserMatch ? scriptUserMatch[1] : ""),',
       '    title: toText(document.querySelector("#threadtitle h1")) || toText(document.querySelector("h1")) || (document.title || "").replace(/\\s+-\\s+.*$/, "").trim(),',
       '    currentPage: currentMatch ? Number.parseInt(currentMatch[0], 10) : requestedPage,',

@@ -12,6 +12,7 @@ import { ThreadDetailPage } from '../presentation/thread/ThreadDetailPage';
 import { UserProfilePage } from '../presentation/profile/UserProfilePage';
 import { BlacklistPage } from '../presentation/blacklist/BlacklistPage';
 import { SettingsPage } from '../presentation/settings/SettingsPage';
+import { AboutPage } from '../presentation/about/AboutPage';
 import { PrivacyPolicyPage } from '../presentation/privacy/PrivacyPolicyPage';
 import { ReadingHistoryPage } from '../presentation/history/ReadingHistoryPage';
 import { WebContentPage } from '../presentation/web/WebContentPage';
@@ -95,6 +96,8 @@ struct Index {
       PrivateMessageDetailPage();
     } else if (routeName === 'Settings') {
       SettingsPage();
+    } else if (routeName === 'About') {
+      AboutPage();
     } else if (routeName === 'PrivacyPolicy') {
       PrivacyPolicyPage();
     } else if (routeName === 'ReadingHistory') {

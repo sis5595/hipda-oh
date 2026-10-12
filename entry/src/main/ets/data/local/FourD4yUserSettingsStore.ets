@@ -8,7 +8,7 @@ const PREFERENCES_NAME: string = 'four_d4y_user_settings';
 const SETTINGS_KEY: string = 'settings_v1';
 
 /**
- * Small local preference store for display-only choices. Forum authentication,
+ * Small local preference store for presentation and opt-in post-tail choices. Forum authentication,
  * cookies, form fields, and page content are never read or written here.
  */
 export class FourD4yUserSettingsStore {

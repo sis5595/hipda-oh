@@ -1422,7 +1422,10 @@ export struct HomePage {
       imageLoadPolicy: this.drawerSettings.imageLoadPolicy,
       quickForumIds: [...this.drawerSettings.quickForumIds],
       showPinnedThreads: this.drawerSettings.showPinnedThreads,
-      postTimeSortForumIds: [...this.drawerSettings.postTimeSortForumIds]
+      postTimeSortForumIds: [...this.drawerSettings.postTimeSortForumIds],
+      addPostTail: this.drawerSettings.addPostTail,
+      postTailText: this.drawerSettings.postTailText,
+      postTailUrl: this.drawerSettings.postTailUrl
     };
   }
 
@@ -1434,7 +1437,10 @@ export struct HomePage {
       imageLoadPolicy: this.drawerSettings.imageLoadPolicy,
       quickForumIds: [...this.drawerSettings.quickForumIds],
       showPinnedThreads: this.drawerSettings.showPinnedThreads,
-      postTimeSortForumIds: [...this.drawerSettings.postTimeSortForumIds]
+      postTimeSortForumIds: [...this.drawerSettings.postTimeSortForumIds],
+      addPostTail: this.drawerSettings.addPostTail,
+      postTailText: this.drawerSettings.postTailText,
+      postTailUrl: this.drawerSettings.postTailUrl
     };
   }
 
@@ -1446,7 +1452,10 @@ export struct HomePage {
       imageLoadPolicy: this.drawerSettings.imageLoadPolicy,
       quickForumIds: [...this.drawerSettings.quickForumIds],
       showPinnedThreads: this.drawerSettings.showPinnedThreads,
-      postTimeSortForumIds: [...this.drawerSettings.postTimeSortForumIds]
+      postTimeSortForumIds: [...this.drawerSettings.postTimeSortForumIds],
+      addPostTail: this.drawerSettings.addPostTail,
+      postTailText: this.drawerSettings.postTailText,
+      postTailUrl: this.drawerSettings.postTailUrl
     };
   }
 
@@ -1458,7 +1467,10 @@ export struct HomePage {
       imageLoadPolicy: this.drawerSettings.imageLoadPolicy,
       quickForumIds: [...this.drawerSettings.quickForumIds],
       showPinnedThreads: showPinnedThreads,
-      postTimeSortForumIds: [...postTimeSortForumIds]
+      postTimeSortForumIds: [...postTimeSortForumIds],
+      addPostTail: this.drawerSettings.addPostTail,
+      postTailText: this.drawerSettings.postTailText,
+      postTailUrl: this.drawerSettings.postTailUrl
     };
   }
 

@@ -62,6 +62,8 @@ export interface ForumNewThreadPreflightPayload {
 
 export interface ThreadWebPayload {
   threadId: string;
+  /** Optional for older templates; only the trusted forum breadcrumb supplies it. */
+  forumId?: string;
   /** Current account id extracted only from the signed-in page header. */
   viewerUserId: string;
   title: string;
@@ -158,6 +160,8 @@ export function parseThreadWebPayload(rawResult: string): ThreadWebPayload | nul
   try {
     const payload: ThreadWebPayload = JSON.parse(payloadText) as ThreadWebPayload;
     if (typeof payload.threadId !== 'string' || typeof payload.viewerUserId !== 'string' ||
+      (payload.forumId !== undefined && (typeof payload.forumId !== 'string' ||
+        (payload.forumId.length > 0 && !/^\d{1,20}$/.test(payload.forumId)))) ||
       (payload.viewerUserId.length > 0 && !/^\d+$/.test(payload.viewerUserId)) ||
       typeof payload.title !== 'string' ||
       typeof payload.currentPage !== 'number' || typeof payload.lastPage !== 'number' ||

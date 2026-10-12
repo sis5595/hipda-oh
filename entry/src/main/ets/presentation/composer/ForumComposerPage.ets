@@ -1,5 +1,6 @@
 import { webview } from '@kit.ArkWeb';
-import { KeyboardAvoidMode } from '@kit.ArkUI';
+import { common } from '@kit.AbilityKit';
+import { KeyboardAvoidMode, window } from '@kit.ArkUI';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import fs from '@ohos.file.fs';
 import http from '@ohos.net.http';
@@ -12,6 +13,9 @@ import { FourD4yComposerChoice, FourD4yComposerImageAttachment, FourD4yComposerP
   parseFourD4yImageUploadStatusPayload, getFourD4yImageUploadComposerAction,
   supportsFourD4yComposerImageUpload } from '../../domain/composer/FourD4yComposerContracts';
 import { FourD4yPageAccessState } from '../../domain/reader/FourD4yReaderContracts';
+import { FourD4yUserSettingsStore } from '../../data/local/FourD4yUserSettingsStore';
+import { FourD4yUserSettings } from '../../domain/settings/FourD4yUserSettings';
+import { appendFourD4yPostTail } from '../../domain/settings/FourD4yPostTail';
 import { createForumComposerPostEditedResult, createForumComposerReplyPublishedResult,
   createForumComposerThreadPublishedResult,
   ForumComposerRouteParams } from './ForumComposerRouteState';
@@ -131,6 +135,7 @@ export struct ForumComposerPage {
   private pendingTags: string = '';
   // Read only from the current signed-in form. It is never persisted.
   private viewerUserId: string = '';
+  private postTailSettings: FourD4yUserSettings | undefined = undefined;
   private composerUrl: string = '';
   private readingPreflightSequence: number = -1;
   private readingSubmissionSequence: number = -1;
@@ -175,6 +180,44 @@ export struct ForumComposerPage {
   private readonly composerInputId: string = 'hipda-oh-composer-input';
   private previousKeyboardAvoidMode: KeyboardAvoidMode = KeyboardAvoidMode.OFFSET;
   private hasAdjustedKeyboardAvoidMode: boolean = false;
+  @State private editKeyboardInset: number = 0;
+  private editWindow: window.Window | undefined = undefined;
+  private readonly onEditKeyboardHeight = (height: number): void => {
+    if (!this.isComposerRouteReady || !this.editWindow || !Number.isFinite(height)) {
+      return;
+    }
+    try {
+      const navigationInset: number = this.editWindow.getWindowAvoidArea(
+        window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height;
+      this.editKeyboardInset = this.getUIContext().px2vp(Math.max(0, height - navigationInset));
+    } catch (_error) {
+      // A closing window can no longer report its safe area.
+    }
+  };
+
+  private async attachEditKeyboard(): Promise<void> {
+    if (this.route.mode !== ForumComposerMode.Edit || this.editWindow) {
+      return;
+    }
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const currentWindow = await window.getLastWindow(context);
+      if (!this.isComposerRouteReady || this.editWindow) {
+        return;
+      }
+      this.editWindow = currentWindow;
+      currentWindow.on('keyboardHeightChange', this.onEditKeyboardHeight);
+      // NavDestination kept its uncompressed measured height on the device.
+      // Use the actual keyboard inset for edit only, without double avoidance.
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.NONE);
+      this.onEditKeyboardHeight(currentWindow.getWindowAvoidArea(
+        window.AvoidAreaType.TYPE_KEYBOARD).bottomRect.height);
+    } catch (_error) {
+      if (this.isComposerRouteReady) {
+        this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+      }
+    }
+  }
 
   aboutToAppear(): void {
     try {
@@ -192,6 +235,14 @@ export struct ForumComposerPage {
     // their timers. Leaving must not start the next upload or submit a form
     // whose asynchronous preflight completed after the editor was closed.
     this.isComposerRouteReady = false;
+    if (this.editWindow) {
+      try {
+        this.editWindow.off('keyboardHeightChange', this.onEditKeyboardHeight);
+      } catch (_error) {
+        // The window may already have been destroyed.
+      }
+      this.editWindow = undefined;
+    }
     this.formSequence += 1;
     this.submissionSequence += 1;
     this.pendingImageUploadSequence = -1;
@@ -289,40 +340,7 @@ export struct ForumComposerPage {
         } else if (this.isAdvancedReplyMode()) {
           this.buildAdvancedReplyEditor();
         } else {
-          Column() {
-            Scroll() {
-            Column({ space: 10 }) {
-              this.buildFormState();
-
-              if (this.shouldShowTopicMetadata()) {
-                this.buildNewThreadMetadata();
-              }
-              if (this.shouldShowSubjectInput()) {
-                TextInput({ placeholder: '标题', text: this.subjectDraft })
-                  .fontSize(17)
-                  .fontColor($r('app.color.text_primary'))
-                  .placeholderColor($r('app.color.text_muted'))
-                  .backgroundColor($r('app.color.surface_subtle'))
-                  .border({ width: 1, color: $r('app.color.border_strong'), radius: 6 })
-                  .width('100%')
-                  .padding({ left: 12, right: 12 })
-                  .onChange((value: string) => {
-                    this.subjectDraft = value;
-                  })
-              }
-
-            }
-            .alignItems(HorizontalAlign.Start)
-            .width('100%')
-            .padding({ left: 16, right: 16, top: 12, bottom: 10 })
-            }
-            .layoutWeight(1)
-            .width('100%')
-            this.buildComposerInputBar();
-          }
-          .width('100%')
-          .height('100%')
-          .align(Alignment.Top)
+          this.buildComposerInputBar();
         }
 
         if (this.selectedImagePreviewUri.length > 0) {
@@ -335,6 +353,9 @@ export struct ForumComposerPage {
     }
     .title(this.getComposerTitle())
     .menus(this.buildTitleActions)
+    .onShown(() => {
+      this.attachEditKeyboard();
+    })
     .onReady((context: NavDestinationContext) => {
       const route: ForumComposerRouteParams = context.pathInfo.param as ForumComposerRouteParams;
       this.route = route;
@@ -671,21 +692,60 @@ export struct ForumComposerPage {
   }
 
   /**
-   * NG-style bottom editor: the reading area stays visually quiet and the
-   * current user's composing surface remains immediately above the keyboard.
+   * NG's edit page gives the multiline message the remaining screen height;
+   * only attachments scroll separately above it, with controls at the bottom.
    * The neutral “我” marker intentionally does not pretend to be a fetched
    * avatar; P-24 will supply the shared icon/avatar treatment.
    */
   @Builder
   private buildComposerInputBar() {
     Column({ space: 8 }) {
-      if (this.route.mode === ForumComposerMode.Edit &&
-        (this.existingImageDrafts.length > 0 || this.removedExistingImageAttachmentIds.length > 0)) {
-        this.buildExistingImageControls();
+      Scroll() {
+        Column({ space: 8 }) {
+          this.buildFormState();
+          if (this.shouldShowTopicMetadata()) {
+            this.buildNewThreadMetadata();
+          }
+          if (this.shouldShowSubjectInput()) {
+            TextInput({ placeholder: '标题', text: this.subjectDraft })
+              .fontSize(17)
+              .fontColor($r('app.color.text_primary'))
+              .placeholderColor($r('app.color.text_muted'))
+              .backgroundColor($r('app.color.surface_subtle'))
+              .border({ width: 1, color: $r('app.color.border_strong'), radius: 6 })
+              .width('100%')
+              .padding({ left: 12, right: 12 })
+              .onChange((value: string) => { this.subjectDraft = value; })
+          }
+          if (this.route.mode === ForumComposerMode.Edit &&
+            (this.existingImageDrafts.length > 0 || this.removedExistingImageAttachmentIds.length > 0)) {
+            this.buildExistingImageControls();
+          }
+          if (this.supportsImageUpload() && this.isImageUploadAvailable) {
+            this.buildImageUploadControls();
+          }
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
       }
-      if (this.supportsImageUpload() && this.isImageUploadAvailable) {
-        this.buildImageUploadControls();
-      }
+      .width('100%')
+      .constraintSize({ maxHeight: '30%' })
+      TextArea({ placeholder: this.route.mode === ForumComposerMode.Quote ? '编辑引用内容或写下回复' : '写下内容', text: this.messageDraft })
+        .id(this.composerInputId)
+        .defaultFocus(true)
+        .layoutWeight(1)
+        .width('100%')
+        .fontSize(18)
+        .fontColor($r('app.color.text_primary'))
+        .placeholderColor($r('app.color.text_muted'))
+        .backgroundColor(Color.Transparent)
+        .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+        .onAppear(() => {
+          this.requestComposerInputFocus();
+        })
+        .onChange((value: string) => {
+          this.messageDraft = value;
+        })
       Row({ space: 10 }) {
         Stack({ alignContent: Alignment.Center }) {
           Text('我')
@@ -698,17 +758,7 @@ export struct ForumComposerPage {
         .backgroundColor($r('app.color.fill_selected'))
         .borderRadius(19)
 
-        TextArea({ placeholder: this.route.mode === ForumComposerMode.Quote ? '编辑引用内容或写下回复' : '写下内容', text: this.messageDraft })
-          .layoutWeight(1)
-          .height(52)
-          .fontSize(18)
-          .fontColor($r('app.color.text_primary'))
-          .placeholderColor($r('app.color.text_muted'))
-          .backgroundColor(Color.Transparent)
-          .padding({ left: 0, right: 0, top: 4, bottom: 4 })
-          .onChange((value: string) => {
-            this.messageDraft = value;
-          })
+        Blank().layoutWeight(1)
 
         if (this.isSubmitting) {
           LoadingProgress()
@@ -732,12 +782,14 @@ export struct ForumComposerPage {
       }
       .alignItems(VerticalAlign.Center)
       .width('100%')
+      .height(48)
       Divider()
         .color($r('app.color.border_strong'))
         .margin({ left: 48, right: 52 })
     }
     .alignItems(HorizontalAlign.Start)
     .width('100%')
+    .height(`calc(100% - ${this.editKeyboardInset}vp)`)
     .backgroundColor($r('app.color.surface'))
     .padding({ left: 14, right: 8, top: 8, bottom: 10 })
   }
@@ -1053,6 +1105,7 @@ export struct ForumComposerPage {
     this.imageUploadSurfaceSequence = -1;
     this.formMessage = '';
     this.viewerUserId = '';
+    this.postTailSettings = undefined;
     this.clearImageUploadHashProbe();
     this.nativeImageUploadProbeSequence = -1;
     this.isNativeImageUploadProbeLoading = false;
@@ -1097,7 +1150,8 @@ export struct ForumComposerPage {
       return base + 'action=newthread&fid=' + this.route.forumId + '&mobile=no&oh_compose=' + sequence;
     }
     if (this.route.mode === ForumComposerMode.Edit) {
-      return base + 'action=edit&fid=' + this.route.forumId + '&tid=' + this.route.threadId +
+      const forumQuery: string = /^\d+$/.test(this.route.forumId) ? '&fid=' + this.route.forumId : '';
+      return base + 'action=edit' + forumQuery + '&tid=' + this.route.threadId +
         '&pid=' + this.route.postId + '&page=1&mobile=no&oh_compose=' + sequence;
     }
     let url: string = base + 'action=reply&tid=' + this.route.threadId;
@@ -1167,6 +1221,12 @@ export struct ForumComposerPage {
           this.failPreflight('当前 4D4Y 表单结构尚未通过校验，未启用发送。');
         }
         return;
+      }
+      if (this.route.mode !== ForumComposerMode.Edit) {
+        const settings: FourD4yUserSettings = await FourD4yUserSettingsStore.load(
+          this.getUIContext().getHostContext() as common.Context);
+        if (!this.isComposerRouteReady || !this.isPreflightLoading || expectedSequence !== this.formSequence) return;
+        this.postTailSettings = settings;
       }
       this.clearFormWatchdog();
       this.isPreflightLoading = false;
@@ -1844,7 +1904,8 @@ export struct ForumComposerPage {
     this.submissionErrorMessage = '';
     this.submissionSequence += 1;
     this.pendingSubject = this.subjectDraft.trim();
-    this.pendingMessage = this.getOutgoingMessage();
+    this.pendingMessage = appendFourD4yPostTail(this.getOutgoingMessage(), this.postTailSettings,
+      this.route.mode === ForumComposerMode.Edit);
     this.pendingImageAttachmentIds = this.uploadedImageAttachmentIds.slice();
     this.pendingRemovedExistingImageAttachmentIds = this.route.mode === ForumComposerMode.Edit ?
       this.removedExistingImageAttachmentIds.slice() : [];

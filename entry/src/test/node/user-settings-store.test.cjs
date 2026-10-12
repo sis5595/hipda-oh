@@ -16,7 +16,8 @@ function load(relative, dependencies = {}) {
   return exports;
 }
 const catalog = load('domain/catalog/FourD4yForumCatalog');
-const contracts = load('domain/settings/FourD4yUserSettings', { '../catalog/FourD4yForumCatalog': catalog });
+const contracts = load('domain/settings/FourD4yUserSettings', { '../catalog/FourD4yForumCatalog': catalog,
+  './FourD4yPostTail': load('domain/settings/FourD4yPostTail') });
 const baseline = contracts.createDefaultFourD4yUserSettings();
 let memory = JSON.stringify(baseline), disk = memory, failRead = false, failFlush = false;
 let flushGate;

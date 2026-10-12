@@ -114,7 +114,7 @@ vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.resolve(__dirname,
   '../../main/ets/domain/reader/FourD4yReaderContracts.ets'), 'utf8'), { compilerOptions: {
   target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS
 } }).outputText, { exports: contracts });
-function extractPage(authorHref) {
+function extractPage(authorHref, forumLinks = []) {
   const author = authorHref === undefined ? null : new Element('a', [text('sample')], { href: authorHref });
   const body = new Element('div', [text('sample body')], { id: 'postmessage_1' });
   const post = new Element('div', [body], { id: 'post_1' });
@@ -128,7 +128,8 @@ function extractPage(authorHref) {
     document: { body: element('body'), title: 'sample', scripts: [],
       documentElement: { innerHTML: '' }, getElementById: () => null,
       querySelector: () => null,
-      querySelectorAll: selector => selector === '[id]' ? [post, body] : [] }
+      querySelectorAll: selector => selector === '[id]' ? [post, body] :
+        (selector === '#nav a[href]' ? forumLinks : []) }
   });
 }
 for (const href of [undefined, 'space.php?uid=123', 'space.php?uid=invalid']) {
@@ -145,3 +146,31 @@ invalidIdentity.posts[0].authorUserId = 'not-an-id';
 assert.equal(contracts.parseThreadWebPayload(JSON.stringify(invalidIdentity)), null,
   'do not relax validation of a supplied identity');
 console.log('PASS: full thread extractor/reader contract with present, absent and malformed profile links.');
+
+const navLink = (href, insidePost = false) => ({ getAttribute: () => href,
+  closest: () => insidePost ? {} : null });
+for (const [links, expected] of [
+  [[], ''],
+  [[navLink('forumdisplay.php?fid=2')], '2'],
+  [[navLink('forumdisplay.php?fid=51&amp;page=1')], '51'],
+  [[navLink('https://evil.example/forum/forumdisplay.php?fid=99')], ''],
+  [[navLink('http://www.4d4y.com/forum/forumdisplay.php?fid=99')], ''],
+  [[navLink('https://user:pass@www.4d4y.com/forum/forumdisplay.php?fid=99')], ''],
+  [[navLink('viewthread.php?fid=99&tid=100')], ''],
+  [[navLink('forumdisplay.php?fid=2&fid=99')], ''],
+  [[navLink('forumdisplay.php?fid=invalid')], ''],
+  [[navLink('forumdisplay.php?fid=99', true), navLink('forumdisplay.php?fid=2')], '2']
+]) {
+  const parsed = contracts.parseThreadWebPayload(extractPage('space.php?uid=123', links));
+  assert.ok(parsed);
+  assert.equal(parsed.forumId, expected);
+}
+for (const invalid of ['invalid', '2&fid=99', 2, null]) {
+  const payload = JSON.parse(extractPage('space.php?uid=123'));
+  payload.forumId = invalid;
+  assert.equal(contracts.parseThreadWebPayload(JSON.stringify(payload)), null);
+}
+const oldPayload = JSON.parse(extractPage('space.php?uid=123'));
+delete oldPayload.forumId;
+assert.ok(contracts.parseThreadWebPayload(JSON.stringify(oldPayload)));
+console.log('PASS: breadcrumb-only board identity; no post/quote links, foreign origins or ambiguous fid.');
