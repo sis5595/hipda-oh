@@ -5,6 +5,8 @@ export interface WebThreadSummary {
   id: string;
   title: string;
   authorName: string;
+  authorUserId?: string;
+  titleColor?: string;
   replyCount: number;
   viewCount: number;
   threadType: string;
@@ -349,6 +351,10 @@ function areWebThreadSummariesValid(threads: WebThreadSummary[]): boolean {
     const thread: WebThreadSummary = threads[index];
     if (typeof thread.id !== 'string' || !/^\d+$/.test(thread.id) ||
       typeof thread.title !== 'string' || typeof thread.authorName !== 'string' ||
+      (thread.authorUserId !== undefined && (typeof thread.authorUserId !== 'string' ||
+        (thread.authorUserId.length > 0 && !/^\d{1,20}$/.test(thread.authorUserId)))) ||
+      (thread.titleColor !== undefined && (typeof thread.titleColor !== 'string' ||
+        (thread.titleColor.length > 0 && !/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(thread.titleColor)))) ||
       typeof thread.replyCount !== 'number' || !Number.isFinite(thread.replyCount) || thread.replyCount < 0 ||
       typeof thread.viewCount !== 'number' || !Number.isFinite(thread.viewCount) || thread.viewCount < 0 ||
       typeof thread.threadType !== 'string' || thread.threadType.length > 80 ||
@@ -384,6 +390,8 @@ function areThreadPostsValid(posts: ThreadPost[]): boolean {
         typeof content.value !== 'string' ||
         (content.url !== undefined && typeof content.url !== 'string') ||
         (content.previewUrl !== undefined && typeof content.previewUrl !== 'string') ||
+        (content.isSmallText !== undefined && (typeof content.isSmallText !== 'boolean' ||
+          (content.isSmallText && content.kind !== 'text' && content.kind !== 'link'))) ||
         (content.quoteAuthor !== undefined && (typeof content.quoteAuthor !== 'string' ||
           content.quoteAuthor.length > 120)) ||
         (content.quoteThreadId !== undefined && (typeof content.quoteThreadId !== 'string' ||

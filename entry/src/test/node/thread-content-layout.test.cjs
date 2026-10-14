@@ -31,7 +31,13 @@ class Element {
   }
   get textContent() { return this.childNodes.map(n => n.nodeValue || n.textContent || '').join(''); }
   getAttribute(name) { return this.attributes[name] || null; }
-  querySelector() { return null; }
+  querySelector(selector) {
+    if (selector === 'font[size="1"], small') {
+      return this.querySelectorAll('*').find(node => node.tagName === 'SMALL' ||
+        (node.tagName === 'FONT' && node.getAttribute('size') === '1')) || null;
+    }
+    return null;
+  }
   querySelectorAll(selector) {
     const nodes = this.childNodes.filter(n => n.nodeType === 1);
     const descendants = nodes.flatMap(n => [n, ...n.querySelectorAll('*')]);
@@ -78,6 +84,21 @@ assert.equal(content[2].value, '乙');
 assert.equal(content[1].url, image.getAttribute('src'));
 const link = new Element('a', [text('样例链接')], { href: 'https://example.com/' });
 assert.deepEqual(extract(text('甲'), link, text('乙')).map(item => item.kind), ['text', 'link', 'text']);
+const smallFont = new Element('font', [text('样例尾巴')], { size: '1' });
+const smallLink = new Element('a', [smallFont], { href: 'https://example.com/' });
+const withTail = extract(text('正文'), smallLink);
+assert.equal(withTail[0].isSmallText, undefined);
+assert.equal(withTail[1].isSmallText, true);
+assert.equal(withTail[1].kind, 'link');
+assert.equal(withTail[1].value, '样例尾巴');
+assert.equal(withTail[1].url, 'https://example.com/');
+assert.equal(extract(new Element('font', [link], {size:'1'}))[0].isSmallText, true);
+assert.deepEqual(extract(text('正文'), smallFont).map(item => [item.kind, item.value, item.isSmallText]),
+  [['text','正文',undefined], ['text','样例尾巴',true]], 'small plain tails must not merge into ordinary text');
+const mixedLink = new Element('a', [text('普通文字'), smallFont], {href:'https://example.com/'});
+assert.equal(extract(mixedLink)[0].isSmallText, undefined, 'mixed link text must not all shrink');
+assert.equal(extract(link, smallLink).length, 2, 'normal link and small signature to the same URL both survive');
+assert.equal(extract(new Element('font', [text('正文')], {size:'2'}))[0].isSmallText, undefined);
 const menu = new Element('div', [text('not body')], { class: 't_attach attachimg' });
 assert.equal(value(text('甲'), menu, text('乙')), '甲乙');
 const status = new Element('i', [text('not body')], { class: 'pstatus' });

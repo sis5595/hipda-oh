@@ -6,16 +6,16 @@
 
 ## 下载
 
-当前版本：**1.0.0-beta.3**。
+当前版本：**1.0.0-beta.4**。
 
 本次更新：
 
-- 新增“关于”页面，可查看安装版本和联系方式。
-- 新增“小尾巴”，可在设置中开启，并修改文字和链接。
-- 修复部分情况下自己的回帖没有“编辑”选项的问题。
-- 扩大帖子编辑框，键盘打开时也能看到发送按钮。
+- 帖子列表增加楼主头像。
+- 按论坛设置显示主题标题的高亮颜色。
+- 缩小小尾巴字号，隐藏重复的网址。
+- 新增默认表情、酷猴和呆呆男，可用于发帖、回复、编辑和私信。
 
-从 [GitHub Releases](https://github.com/sis5595/hipda-oh/releases/tag/v1.0.0-beta.3) 下载 `hipda-oh-1.0.0-beta.3-unsigned.hap`，源码 ZIP 不能直接安装。历次更新见[更新记录](CHANGELOG.md)。
+从 [GitHub Releases](https://github.com/sis5595/hipda-oh/releases/tag/v1.0.0-beta.4) 下载 `hipda-oh-1.0.0-beta.4-unsigned.hap`，源码 ZIP 不能直接安装。历次更新见[更新记录](CHANGELOG.md)。
 
 **目前尚未上架应用商店，现阶段只能侧载。** 项目正在积极准备上架境外华为 AppGallery，希望未来可通过海外商店正常下载安装和更新，但不承诺具体日期。
 

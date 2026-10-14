@@ -1,3 +1,4 @@
+import { ForumSmileyButton } from './ForumSmileyButton';
 import { webview } from '@kit.ArkWeb';
 import { common } from '@kit.AbilityKit';
 import { KeyboardAvoidMode, window } from '@kit.ArkUI';
@@ -89,6 +90,9 @@ export struct ForumComposerPage {
   /** A reply edit page can expose an empty subject input; only a real title is editable. */
   @State hasEditableSubject: boolean = false;
   @State messageDraft: string = '';
+  @State smileySelectionStart: number = -1;
+  @State smileySelectionEnd: number = -1;
+  private readonly smileyTextController: TextAreaController = new TextAreaController();
   /** Presentation-only preview of the live quote template; never submitted on its own. */
   @State quotePreviewText: string = '';
   @State isPreflightLoading: boolean = false;
@@ -523,8 +527,17 @@ export struct ForumComposerPage {
       .width('100%')
       .scrollBar(BarState.Auto)
 
+      ForumSmileyButton({ text: $messageDraft, selectionStart: $smileySelectionStart,
+          selectionEnd: $smileySelectionEnd, controller: this.smileyTextController })
+        .enabled(!this.isSubmitting)
       Row({ space: 6 }) {
-        TextArea({ placeholder: '写下内容', text: this.messageDraft })
+        TextArea({ placeholder: '写下内容', text: this.messageDraft, controller: this.smileyTextController })
+          .onTextSelectionChange((start: number, end: number) => {
+            if (start >= 0 && end >= 0) {
+              this.smileySelectionStart = start;
+              this.smileySelectionEnd = end;
+            }
+          })
           .id(this.composerInputId)
           .fontSize(18)
           .fontColor($r('app.color.text_primary'))
@@ -619,7 +632,13 @@ export struct ForumComposerPage {
       .width('100%')
       .padding({ left: 16, right: 16, top: 10 })
 
-      TextArea({ placeholder: '写下回复', text: this.messageDraft })
+      TextArea({ placeholder: '写下回复', text: this.messageDraft, controller: this.smileyTextController })
+          .onTextSelectionChange((start: number, end: number) => {
+            if (start >= 0 && end >= 0) {
+              this.smileySelectionStart = start;
+              this.smileySelectionEnd = end;
+            }
+          })
         .id(this.composerInputId)
         .defaultFocus(true)
         .layoutWeight(1)
@@ -639,16 +658,9 @@ export struct ForumComposerPage {
         })
 
       Row({ space: 10 }) {
-        Stack({ alignContent: Alignment.Center }) {
-          Text('我')
-            .fontSize(14)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.brand'))
-        }
-        .width(38)
-        .height(38)
-        .backgroundColor($r('app.color.fill_selected'))
-        .borderRadius(19)
+        ForumSmileyButton({ text: $messageDraft, selectionStart: $smileySelectionStart,
+          selectionEnd: $smileySelectionEnd, controller: this.smileyTextController })
+          .enabled(!this.isSubmitting)
 
         Blank().layoutWeight(1)
 
@@ -730,7 +742,13 @@ export struct ForumComposerPage {
       }
       .width('100%')
       .constraintSize({ maxHeight: '30%' })
-      TextArea({ placeholder: this.route.mode === ForumComposerMode.Quote ? '编辑引用内容或写下回复' : '写下内容', text: this.messageDraft })
+      TextArea({ placeholder: this.route.mode === ForumComposerMode.Quote ? '编辑引用内容或写下回复' : '写下内容', text: this.messageDraft, controller: this.smileyTextController })
+          .onTextSelectionChange((start: number, end: number) => {
+            if (start >= 0 && end >= 0) {
+              this.smileySelectionStart = start;
+              this.smileySelectionEnd = end;
+            }
+          })
         .id(this.composerInputId)
         .defaultFocus(true)
         .layoutWeight(1)
@@ -747,16 +765,9 @@ export struct ForumComposerPage {
           this.messageDraft = value;
         })
       Row({ space: 10 }) {
-        Stack({ alignContent: Alignment.Center }) {
-          Text('我')
-            .fontSize(14)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.brand'))
-        }
-        .width(38)
-        .height(38)
-        .backgroundColor($r('app.color.fill_selected'))
-        .borderRadius(19)
+        ForumSmileyButton({ text: $messageDraft, selectionStart: $smileySelectionStart,
+          selectionEnd: $smileySelectionEnd, controller: this.smileyTextController })
+          .enabled(!this.isSubmitting)
 
         Blank().layoutWeight(1)
 

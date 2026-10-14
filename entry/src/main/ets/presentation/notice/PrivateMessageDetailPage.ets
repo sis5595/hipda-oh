@@ -1,3 +1,4 @@
+import { ForumSmileyButton } from '../composer/ForumSmileyButton';
 import { webview } from '@kit.ArkWeb';
 import { FourD4yRowVersions } from '../common/FourD4yRowVersions';
 import { FrameCallback } from '@kit.ArkUI';
@@ -60,6 +61,9 @@ export struct PrivateMessageDetailPage {
   @State isRefreshing: boolean = false;
   @State statusMessage: string = '';
   @State privateMessageDraft: string = '';
+  @State smileySelectionStart: number = -1;
+  @State smileySelectionEnd: number = -1;
+  private readonly smileyTextController: TextAreaController = new TextAreaController();
   @State isPrivateMessageFormLoading: boolean = false;
   @State isPrivateMessageFormReady: boolean = false;
   @State isPrivateMessageSending: boolean = false;
@@ -277,8 +281,17 @@ export struct PrivateMessageDetailPage {
           .fontColor($r('app.color.text_secondary'))
           .width('100%')
       }
+      ForumSmileyButton({ text: $privateMessageDraft, selectionStart: $smileySelectionStart,
+          selectionEnd: $smileySelectionEnd, controller: this.smileyTextController })
+        .enabled(!this.isPrivateMessageSending && !this.isClearingConversation)
       if (this.composeOnly) {
-        TextArea({ placeholder: '私信内容', text: this.privateMessageDraft })
+        TextArea({ placeholder: '私信内容', text: this.privateMessageDraft, controller: this.smileyTextController })
+          .onTextSelectionChange((start: number, end: number) => {
+            if (start >= 0 && end >= 0) {
+              this.smileySelectionStart = start;
+              this.smileySelectionEnd = end;
+            }
+          })
           .fontSize(15)
           .fontColor($r('app.color.text_primary'))
           .placeholderColor($r('app.color.text_muted'))
@@ -305,7 +318,13 @@ export struct PrivateMessageDetailPage {
           })
       } else {
         Row({ space: 8 }) {
-        TextArea({ placeholder: '回复私信', text: this.privateMessageDraft })
+        TextArea({ placeholder: '回复私信', text: this.privateMessageDraft, controller: this.smileyTextController })
+          .onTextSelectionChange((start: number, end: number) => {
+            if (start >= 0 && end >= 0) {
+              this.smileySelectionStart = start;
+              this.smileySelectionEnd = end;
+            }
+          })
           .fontSize(15)
           .fontColor($r('app.color.text_primary'))
           .placeholderColor($r('app.color.text_muted'))

@@ -67,9 +67,11 @@ const form = { method: 'post', action: '', getAttribute: () => 'pm.php?action=se
 const context = { URL, location: { href: preflight }, window: {},
   document: { forms: [form], createElement: () => ({}) },
   HTMLFormElement: { prototype: { submit() { posts++; } } } };
-const submitScript = page.getPrivateMessageSubmissionScript('2', 'synthetic message');
+const smileyMessage = 'synthetic message :handshake:{:2_41:}{:3_57:}';
+const submitScript = page.getPrivateMessageSubmissionScript('2', smileyMessage);
 vm.runInNewContext(submitScript, context);
 assert.equal(posts, 1);
+assert.equal(fields.message.value, smileyMessage, 'forum smiley codes must survive PM submission unchanged');
 assert.equal(new URL(form.action).searchParams.get('oh_pm_submit'), '3');
 assert.throws(() => vm.runInNewContext(submitScript, context), /pm-document-not-current/);
 assert.equal(posts, 1, 'one document can submit only once');

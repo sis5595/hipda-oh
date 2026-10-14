@@ -1,5 +1,6 @@
 import { ForumSummary, ThreadSummary } from '../../domain/model/ForumModels';
 import { FourD4yRowVersions } from '../common/FourD4yRowVersions';
+import { buildFourD4yAvatarUrl } from '../../domain/profile/FourD4yAvatar';
 import { buildFourD4yEmptyForumScript, buildFourD4yForumFilterQuery, buildFourD4yForumNavigationScript, retainSelectedFourD4yForumType } from '../../domain/reader/FourD4yForumFilter';
 import { FourD4yPageAccessState, FourD4yReaderOutcome, ForumNewThreadPreflightPayload, ForumThreadType, ForumWebPayload, getForumReaderOutcome, isCurrentFourD4yWebRequest, isExpectedForumNewThreadPreflightPayload, isExpectedForumWebPayload, isReadyForumNewThreadForm, parseForumNewThreadPreflightPayload, parseForumWebPayload, WebThreadSummary } from '../../domain/reader/FourD4yReaderContracts';
 import { webview } from '@kit.ArkWeb';
@@ -941,6 +942,15 @@ export struct HomePage {
   private buildThreadItem(thread: ThreadSummary) {
     Column({ space: 4 }) {
       Row() {
+        ForEach([buildFourD4yAvatarUrl(thread.authorUserId)], (avatarUrl: string) => {
+          Image(avatarUrl.length > 0 ? avatarUrl : $r('app.media.avatar_default'))
+            .alt($r('app.media.avatar_default'))
+            .width(36)
+            .height(36)
+            .objectFit(ImageFit.Cover)
+            .borderRadius(18)
+            .margin({ right: 8 })
+        }, (avatarUrl: string) => avatarUrl)
         Row({ space: 7 }) {
           if (thread.isPinned) {
             Text('置顶')
@@ -992,7 +1002,8 @@ export struct HomePage {
 
       Text(thread.title)
         .fontSize(17)
-        .fontColor($r('app.color.text_strong'))
+        .fontColor(thread.titleColor && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(thread.titleColor) ?
+          thread.titleColor : $r('app.color.text_strong'))
         .fontWeight(FontWeight.Medium)
         .maxLines(2)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -1748,6 +1759,16 @@ export struct HomePage {
             const authorImage = authorNode ? authorNode.querySelector('img') : null;
             const authorName = toText(authorNode) || (authorNode ? (authorNode.getAttribute('title') || '') : '') ||
               (authorImage ? (authorImage.getAttribute('alt') || '') : '');
+            let authorUserId = '';
+            if (authorNode) {
+              try {
+                const profile = new URL((authorNode.getAttribute('href') || '').replace(/&amp;/g, '&'), location.href);
+                const uid = profile.searchParams.get('uid') || '';
+                if (profile.origin === 'https://www.4d4y.com' && !profile.username && !profile.password &&
+                    profile.pathname === '/forum/space.php' && profile.searchParams.getAll('uid').length === 1 &&
+                    /^\\d{1,20}$/.test(uid)) authorUserId = uid;
+              } catch (_) {}
+            }
             const numsCell = row ? row.querySelector('td.nums, .nums') : null;
             const replyText = toText(numsCell ? numsCell.querySelector('strong, a.num') : null) || toText(numsCell);
             const viewText = toText(numsCell ? numsCell.querySelector('em') : null);
@@ -1764,10 +1785,13 @@ export struct HomePage {
             const createdAt = createTimeMatch ? createTimeMatch[0] : '';
             const rowClasses = row ? ((row.className || '') + ' ' + (row.id || '') + ' ' + (row.innerHTML || '')) : '';
             const titleStyle = titleNode.getAttribute('style') || '';
+            const colorMatch = /(?:^|;)\\s*color\\s*:\\s*(#[0-9a-f]{6}|#[0-9a-f]{3})(?=\\s*(?:;|$|!important))/i.exec(titleStyle);
             threads.push({
               id: threadId,
               title: toText(titleNode),
               authorName: authorName,
+              authorUserId: authorUserId,
+              titleColor: colorMatch ? colorMatch[1] : '',
               replyCount: Number.parseInt(replyText, 10) || 0,
               viewCount: Number.parseInt(viewText, 10) || 0,
               threadType: toText(threadTypeNode).slice(0, 80),
@@ -1849,6 +1873,8 @@ export struct HomePage {
         forumId: forum.id,
         title: thread.title,
         authorName: thread.authorName.length > 0 ? thread.authorName : '未知作者',
+        authorUserId: thread.authorUserId,
+        titleColor: thread.titleColor,
         replyCount: thread.replyCount,
         viewCount: thread.viewCount,
         threadType: thread.threadType,

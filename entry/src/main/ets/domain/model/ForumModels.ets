@@ -13,6 +13,9 @@ export interface ThreadSummary {
   forumId: string;
   title: string;
   authorName: string;
+  authorUserId?: string;
+  /** Forum-supplied title highlight, restricted to a CSS hex colour. */
+  titleColor?: string;
   replyCount: number;
   /** Server-rendered topic views from the board row. */
   viewCount?: number;
@@ -31,6 +34,8 @@ export interface PostContent {
   url?: string;
   /** A directly-renderable attachment preview; `url` remains the full image target. */
   previewUrl?: string;
+  /** A small-font run supplied by the forum, including client signatures. */
+  isSmallText?: boolean;
   /** Structured 4D4Y quote metadata; never flatten these fields into visible body text. */
   quoteAuthor?: string;
   quoteThreadId?: string;

@@ -1,3 +1,4 @@
+import { ForumSmileyButton } from '../composer/ForumSmileyButton';
 import { common, Want } from '@kit.AbilityKit';
 import { bindFourD4yCollectionCache } from '../common/FourD4yCollectionCacheBinding';
 import { FourD4yRowVersions } from '../common/FourD4yRowVersions';
@@ -137,6 +138,9 @@ export struct ThreadDetailPage {
   @State needsWebVerification: boolean = false;
   @State isReplyComposerVisible: boolean = false;
   @State replyDraft: string = '';
+  @State smileySelectionStart: number = -1;
+  @State smileySelectionEnd: number = -1;
+  private readonly smileyTextController: TextAreaController = new TextAreaController();
   @State quickReplyMode: QuickReplyMode = QuickReplyMode.Thread;
   @State quickReplyTargetPostId: string = '';
   @State quickReplyTargetFloor: number = 0;
@@ -1199,7 +1203,9 @@ export struct ThreadDetailPage {
             .margin({ top: 1, bottom: 1 })
         }
         ForEach(post.content, (content: PostContent, index: number) => {
-          this.buildPostContent(content, post.id, index);
+          if (!this.isInlineSmallContent(post.content, index)) {
+            this.buildPostContent(content, post.id, index, this.getInlineSmallSuffix(post.content, index));
+          }
         }, (content: PostContent, index: number) => post.id + '-' + index)
 
         if (post.id === this.postDeletionPreflightPostId && this.postDeletionMessage.length > 0) {
@@ -1559,8 +1565,20 @@ export struct ThreadDetailPage {
     this.postImageSizes = next.length > 200 ? next.slice(next.length - 200) : next;
   }
 
+  private isInlineSmallContent(contents: PostContent[], index: number): boolean {
+    return index > 0 && contents[index].isSmallText === true &&
+      (contents[index].kind === 'text' || contents[index].kind === 'link') &&
+      contents[index - 1].kind === 'text' && contents[index - 1].isSmallText !== true;
+  }
+
+  private getInlineSmallSuffix(contents: PostContent[], index: number): PostContent | undefined {
+    return index + 1 < contents.length && this.isInlineSmallContent(contents, index + 1) ?
+      contents[index + 1] : undefined;
+  }
+
   @Builder
-  private buildPostContent(content: PostContent, postId: string, contentIndex: number) {
+  private buildPostContent(content: PostContent, postId: string, contentIndex: number,
+    smallSuffix: PostContent | undefined) {
     if (content.kind === 'emoji' && this.getContentUrl(content).length > 0) {
       Image(this.getContentUrl(content))
         .width(28)
@@ -1655,6 +1673,15 @@ export struct ThreadDetailPage {
       .padding({ left: 8, right: 8, top: 8, bottom: 8 })
       .backgroundColor($r('app.color.quote_background'))
       .borderRadius(6)
+    } else if (content.kind === 'link' && content.isSmallText === true) {
+      Text(content.value)
+        .fontSize(12)
+        .fontColor($r('app.color.brand'))
+        .decoration({ type: TextDecorationType.Underline })
+        .lineHeight(this.getPostLineHeight(18))
+        .width('100%')
+        .onClick(() => { this.openContent(content); })
+        .monopolizeEvents(true)
     } else if (content.kind === 'link' || content.kind === 'attachment' || content.kind === 'video') {
       Row({ space: 8 }) {
         if (content.kind !== 'attachment') {
@@ -1687,10 +1714,21 @@ export struct ThreadDetailPage {
       })
       .monopolizeEvents(true)
     } else {
-      Text(content.value)
-        .fontSize(16)
-        .fontColor($r('app.color.text_body'))
-        .lineHeight(this.getPostLineHeight(25))
+      Text() {
+        Span(content.value)
+          .fontSize(content.isSmallText === true ? 12 : 16)
+          .fontColor($r('app.color.text_body'))
+        if (smallSuffix !== undefined) {
+          Span('  ' + smallSuffix.value)
+            .fontSize(12)
+            .fontColor(smallSuffix.kind === 'link' ? $r('app.color.brand') : $r('app.color.text_body'))
+            .decoration({ type: smallSuffix.kind === 'link' ? TextDecorationType.Underline : TextDecorationType.None })
+            .onClick(() => {
+              if (smallSuffix !== undefined && smallSuffix.kind === 'link') this.openContent(smallSuffix);
+            })
+        }
+      }
+        .lineHeight(this.getPostLineHeight(content.isSmallText === true ? 18 : 25))
         .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
         .width('100%')
     }
@@ -1888,7 +1926,16 @@ export struct ThreadDetailPage {
             .onClick(() => {
               this.closeQuickReply(true);
             })
-          TextArea({ placeholder: this.getQuickReplyHint(), text: this.replyDraft })
+          ForumSmileyButton({ text: $replyDraft, selectionStart: $smileySelectionStart,
+          selectionEnd: $smileySelectionEnd, controller: this.smileyTextController })
+            .enabled(!this.isReplySubmitting)
+          TextArea({ placeholder: this.getQuickReplyHint(), text: this.replyDraft, controller: this.smileyTextController })
+          .onTextSelectionChange((start: number, end: number) => {
+            if (start >= 0 && end >= 0) {
+              this.smileySelectionStart = start;
+              this.smileySelectionEnd = end;
+            }
+          })
             .id(this.quickReplyInputId)
             .defaultFocus(!this.isPostContextMenuVisible)
             .layoutWeight(1)
@@ -5196,17 +5243,18 @@ export struct ThreadDetailPage {
       '  };',
       '  const extractContent = (body, postContainer) => {',
       '    const values = [];',
-      '    const push = (kind, value, url, previewUrl, quoteData) => {',
+      '    const push = (kind, value, url, previewUrl, quoteData, smallText) => {',
       '      // NG appends adjacent text fragments; a DOM-node boundary is not',
       '      // a line break. Trim only after the complete text run is read, so',
       '      // real <br> and spaces around inline formatting survive.',
       '      const text = kind === "text" ? (value || "") : (value || "").trim();',
       '      if (kind === "text" && !text) return;',
-      '      if (url && values.some((item) => item.kind === kind && item.url === url)) return;',
+      '      if (url && values.some((item) => item.kind === kind && item.url === url && (item.isSmallText === true) === (smallText === true))) return;',
       '      const last = values.length > 0 ? values[values.length - 1] : null;',
-      '      if (kind === "text" && last && last.kind === "text") { last.value += text; return; }',
+      '      if (kind === "text" && last && last.kind === "text" && (last.isSmallText === true) === (smallText === true)) { last.value += text; return; }',
       '      const item = { kind: kind, value: text || url || "", url: url };',
       '      if (!url) delete item.url;',
+      '      if (smallText === true && (kind === "text" || kind === "link")) item.isSmallText = true;',
       '      if (previewUrl && previewUrl !== url) item.previewUrl = previewUrl;',
       '      if (quoteData) {',
       '        if (quoteData.author) item.quoteAuthor = quoteData.author;',
@@ -5221,12 +5269,13 @@ export struct ThreadDetailPage {
       '      const last = values.length > 0 ? values[values.length - 1] : null;',
       '      if (last && last.kind === "text" && !/\\n[ \\t\\r\\f]*$/.test(last.value)) push("text", "\\n");',
       '    };',
-      '    const walk = (node, preserveWhitespace) => {',
-      '      if (node.nodeType === 3) { const raw = node.nodeValue || ""; push("text", preserveWhitespace ? raw : raw.replace(/[ \\t\\r\\n\\f]+/g, " ")); return; }',
+      '    const walk = (node, preserveWhitespace, smallText) => {',
+      '      if (node.nodeType === 3) { const raw = node.nodeValue || ""; push("text", preserveWhitespace ? raw : raw.replace(/[ \\t\\r\\n\\f]+/g, " "), "", "", null, smallText); return; }',
       '      if (node.nodeType !== 1) return;',
       '      const tag = node.tagName.toLowerCase();',
+      '      smallText = smallText === true || tag === "small" || (tag === "font" && (node.getAttribute("size") || "").trim() === "1");',
       '      if (tag === "script" || tag === "style") return;',
-      '      if (tag === "br") { push("text", "\\n"); return; }',
+      '      if (tag === "br") { push("text", "\\n", "", "", null, smallText); return; }',
       '      if (tag === "i" && node.classList && node.classList.contains("pstatus")) return;',
       '      // The poll is rendered as a separate native card. Do not let its',
       '      // form controls and option labels leak into the post body.',
@@ -5273,7 +5322,9 @@ export struct ThreadDetailPage {
       '          const isAttachment = url.indexOf("attachment.php?") >= 0;',
       '          const kind = isAttachment ? "attachment" : (isVideoUrl(url) ? "video" : "link");',
       '          const label = isAttachment ? (node.getAttribute("title") || toText(node) || url) : (toText(node) || url);',
-      '          push(kind, label, url);',
+      '          const smallFont = node.querySelector("font[size=\\"1\\"], small");',
+      '          const isSmallLink = smallText || (smallFont && toText(smallFont) === toText(node));',
+      '          push(kind, label, url, "", null, isSmallLink === true || !!isSmallLink);',
       '        }',
       '        return;',
       '      }',
@@ -5284,7 +5335,7 @@ export struct ThreadDetailPage {
       '      }',
       '      const isBlock = node !== body && /^(?:p|div|li|blockquote|pre|tr|h[1-6])$/.test(tag);',
       '      if (isBlock) blockBreak();',
-      '      Array.from(node.childNodes).forEach((child) => walk(child, preserveWhitespace || tag === "pre"));',
+      '      Array.from(node.childNodes).forEach((child) => walk(child, preserveWhitespace || tag === "pre", smallText));',
       '      if (isBlock) blockBreak();',
       '    };',
       '    if (body) walk(body);',
