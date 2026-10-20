@@ -39,7 +39,8 @@ for (const [before, after] of [
   [{ id: 'post', content: [{ kind: 'text', value: 'before' }] },
     { id: 'post', content: [{ kind: 'text', value: 'after' }] }],
   [{ id: 'pm', isUnread: true, isMine: false }, { id: 'pm', isUnread: false, isMine: false }],
-  [{ id: 'pm', isUnread: false, isMine: false }, { id: 'pm', isUnread: false, isMine: true }]
+  [{ id: 'pm', isUnread: false, isMine: false }, { id: 'pm', isUnread: false, isMine: true }],
+  [{ id: 'notice:1', postId: '88' }, { id: 'notice:1', postId: '99' }]
 ]) {
   const state = new RowVersions(item => item.id), builders = new Map();
   const render = items => state.track(items).map(item => {
@@ -55,7 +56,8 @@ for (const [before, after] of [
 for (const [file, state, value] of [
   ['home/HomePage.ets', 'threadRowVersions', 'thread'],
   ['thread/ThreadDetailPage.ets', 'postRowVersions', 'post'],
-  ['notice/PrivateMessageDetailPage.ets', 'messageRowVersions', 'message']
+  ['notice/PrivateMessageDetailPage.ets', 'messageRowVersions', 'message'],
+  ['notice/MessageCenterPage.ets', 'noticeRowVersions', 'item']
 ]) {
   const source = fs.readFileSync(path.join(root, file), 'utf8');
   assert.ok(source.includes(`this.${state}.track(`), file + ' must publish tracked snapshots');

@@ -39,6 +39,7 @@ function make(status) {
   Object.assign(p, { selectedMode: 'private', items: rows, currentPage: 2, lastPage: 4,
     viewerUserId: '101', loadSequence: 0, terminalLoadSequence: 0,
     isLoading: false, isLoggedIn: true, isResolvingPost: false, isPrivateSearchRunning: false,
+    noticeRowVersions: { track: items => items },
     startLoadWatchdog() {}, clearLoadWatchdog() {}, getModeLabel: () => '私信',
     nativeClient: { loadPage: async (_url, sequence) => ({ status,
       failure: failureExports.classifyFourD4yNetworkFailure(2300055),

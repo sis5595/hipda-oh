@@ -16,6 +16,8 @@
 *.cer
 *.jks
 *.keystore
+*.csr
+/material/
 
 # Local reference code and original icon working files are not product source.
 /references/

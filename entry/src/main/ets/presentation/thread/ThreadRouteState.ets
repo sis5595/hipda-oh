@@ -20,12 +20,15 @@ export interface ThreadRouteParams {
   initialAttentionState: boolean;
   /** Page that established initialAttentionState; used for removal verification. */
   initialAttentionPage: number;
+  /** Show the inline attention action only at the reminder's target post. */
+  openedFromNotice?: boolean;
 }
 
 export function createThreadRouteParams(threadId: string, threadTitle: string,
   replyCount: number, initialPage: number = 1, initialFloor: number = 0,
   forumId: string = '', initialFavoriteState: boolean = false, initialFavoritePage: number = 1,
-  initialPostId: string = '', initialAttentionState: boolean = false, initialAttentionPage: number = 1): ThreadRouteParams {
+  initialPostId: string = '', initialAttentionState: boolean = false, initialAttentionPage: number = 1,
+  openedFromNotice: boolean = false): ThreadRouteParams {
   return {
     threadId: threadId,
     threadTitle: threadTitle,
@@ -37,6 +40,7 @@ export function createThreadRouteParams(threadId: string, threadTitle: string,
     initialFavoriteState: initialFavoriteState,
     initialFavoritePage: Number.isFinite(initialFavoritePage) ? Math.max(1, Math.floor(initialFavoritePage)) : 1,
     initialAttentionState: initialAttentionState,
+    openedFromNotice: openedFromNotice,
     initialAttentionPage: Number.isFinite(initialAttentionPage) ? Math.max(1, Math.floor(initialAttentionPage)) : 1
   };
 }

@@ -33,7 +33,8 @@ export class FourD4ySearchPostNativeResolver {
   private readonly decoder: util.TextDecoder = util.TextDecoder.create('gbk');
 
   async resolve(threadId: string, postId: string, resolveSequence: number,
-    viewerUserId: string, referer: string = FourD4ySession.forumRoot + 'search.php'):
+    viewerUserId: string, referer: string = FourD4ySession.forumRoot + 'search.php',
+    openNotice: boolean = false):
     Promise<FourD4ySearchPostResolveResult> {
     let initialUrl: string | null = threadId.length > 0 ? buildFourD4ySearchPostViewUrl(threadId, postId) :
       buildFourD4ySearchPostTargetUrl('', postId);
@@ -104,6 +105,24 @@ export class FourD4ySearchPostNativeResolver {
     }
     if (payload.floor < 1) {
       return this.result('unsupported-response', payload);
+    }
+    if (openNotice) {
+      // NG opens findpost for reminders. Discuz also resets the followed
+      // topic's pending replies there; viewpid alone only resolves a floor.
+      // Verify the exact PID first, and keep this side effect out of searches.
+      const noticeUrl: string | null = buildFourD4ySearchPostTargetUrl(threadId, postId);
+      if (noticeUrl === null || !await FourD4ySession.isCurrentAccountSessionSecret(cookieHeader)) {
+        return this.result('request-failed', null);
+      }
+      const opened: FourD4ySearchPostHttpPage = await this.loadPage(noticeUrl, cookieHeader, boundedReferer);
+      if (opened.status !== 'success' || !await FourD4ySession.isCurrentAccountSessionSecret(cookieHeader)) {
+        return this.result('request-failed', null);
+      }
+      const openedPayload: FourD4ySearchPostTargetPayload | null = parseFourD4ySearchPostTargetPage(
+        opened.html, opened.finalUrl, threadId, postId, resolveSequence);
+      if (openedPayload !== null && openedPayload.accessState === 'loginRequired') {
+        return this.result('server-login-required', openedPayload);
+      }
     }
     return this.result('success', payload);
   }

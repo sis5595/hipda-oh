@@ -84,6 +84,27 @@ async function run(tid, discovery, final = '<table id="pid88"><a id="postnum88">
   assert.equal(changed.result.status, 'request-failed');
   assert.equal(changed.urls.length, 1, 'account change between steps prevents a follow-up with stale cookies');
   currentSession = true;
+  const notice = new Resolver(), noticeUrls = [];
+  notice.loadPage = async url => {
+    noticeUrls.push(url);
+    return { status: 'success', finalUrl: url,
+      html: '<table id="pid88"><a id="postnum88">61#</a></table>' };
+  };
+  const opened = await notice.resolve('102', '88', 2, '1',
+    'https://www.4d4y.com/forum/notice.php?filter=threads&page=1', true);
+  assert.equal(opened.status, 'success');
+  assert.equal(opened.payload.floor, 61);
+  assert.equal(noticeUrls.length, 2);
+  assert.match(noticeUrls[0], /viewpid=88/);
+  assert.match(noticeUrls[1], /redirect\.php\?goto=findpost&ptid=102&pid=88/);
+  currentSession = false;
+  noticeUrls.length = 0;
+  assert.equal((await notice.resolve('102', '88', 3, '1', undefined, true)).status, 'request-failed');
+  assert.equal(noticeUrls.length, 1, 'account switch prevents acknowledging another account reminder');
+  currentSession = true;
+  notice.loadPage = async url => ({ status: url.includes('redirect.php') ? 'request-failed' : 'success',
+    finalUrl: url, html: '<table id="pid88"><a id="postnum88">61#</a></table>' });
+  assert.equal((await notice.resolve('102', '88', 4, '1', undefined, true)).status, 'request-failed');
   const direct = await run('', '<script>tid = parseInt(\'102\')</script>' +
     '<table id="pid88"><a id="postnum88">1#</a></table>');
   assert.equal(direct.result.status, 'success');

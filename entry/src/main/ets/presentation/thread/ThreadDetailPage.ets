@@ -1118,6 +1118,28 @@ export struct ThreadDetailPage {
 
   @Builder
   private buildPostCardBody(post: ThreadPost) {
+    if (this.route.openedFromNotice === true && post.id === this.route.initialPostId && this.isAttentioned) {
+      Row() {
+        Text('关注主题的新回复')
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'))
+        Blank()
+        Button(this.isAttentionSubmitting ? '处理中…' : '取消关注此主题', { type: ButtonType.Normal })
+          .fontSize(12)
+          .fontColor($r('app.color.brand'))
+          .backgroundColor(Color.Transparent)
+          .height(32)
+          .enabled(this.isLoggedIn && this.attentionOperationUrl.length > 0 &&
+            !this.isAttentionOperationLoading && !this.isAttentionSubmitting &&
+            !this.isFavoriteSubmitting && !this.isLoading)
+          .onClick(() => {
+            if (this.isAttentioned) this.submitAttentionOperation();
+          })
+          .monopolizeEvents(true)
+      }
+      .width('100%')
+      .margin({ bottom: 6 })
+    }
     Row() {
       if (!this.isPostHiddenByBlacklist(post)) {
         // Key by URL so a changed author cannot retain an earlier successful Image source.

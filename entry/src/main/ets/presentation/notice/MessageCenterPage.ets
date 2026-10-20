@@ -19,6 +19,7 @@ import { createThreadRouteParams } from '../thread/ThreadRouteState';
 import { createPrivateMessageRouteParams } from './PrivateMessageRouteState';
 import { MessageCenterRouteParams, readMessageCenterRouteMode } from './MessageCenterRouteState';
 import { FourD4yUnreadState } from '../../domain/notice/FourD4yUnreadState';
+import { FourD4yRowVersions } from '../common/FourD4yRowVersions';
 
 /**
  * Read-only message centre.  Opening this page only fetches the three list
@@ -52,6 +53,8 @@ export struct MessageCenterPage {
 
   private readonly nativeClient: FourD4yMessageNativeClient = new FourD4yMessageNativeClient();
   private readonly postResolver: FourD4ySearchPostNativeResolver = new FourD4ySearchPostNativeResolver();
+  private readonly noticeRowVersions: FourD4yRowVersions<FourD4yMessageItem> =
+    new FourD4yRowVersions<FourD4yMessageItem>((item: FourD4yMessageItem): string => item.itemId);
   private viewerUserId: string = '';
   private loadSequence: number = 0;
   private terminalLoadSequence: number = 0;
@@ -206,7 +209,7 @@ export struct MessageCenterPage {
             .onClick(() => {
               this.openItem(item);
             })
-          }, (item: FourD4yMessageItem) => item.itemId)
+          }, (item: FourD4yMessageItem) => this.noticeRowVersions.key(item))
         }
         .layoutWeight(1)
         .width('100%')
@@ -586,7 +589,7 @@ export struct MessageCenterPage {
       this.terminalLoadSequence = expectedLoadSequence;
       this.isLoading = false;
       this.isLoggedIn = true;
-      this.items = payload.items;
+      this.items = this.noticeRowVersions.track(payload.items);
       this.currentPage = payload.page;
       this.lastPage = payload.lastPage;
       this.viewerUserId = payload.viewerUserId;
@@ -683,7 +686,7 @@ export struct MessageCenterPage {
       const referer: string | null = buildFourD4yMessagePageUrl(this.selectedMode, this.currentPage);
       const result: FourD4ySearchPostResolveResult = await this.postResolver.resolve(
         item.threadId, item.postId, resolveSequence, this.viewerUserId,
-        referer === null ? FourD4ySession.forumRoot : referer);
+        referer === null ? FourD4ySession.forumRoot : referer, true);
       if (!this.isResolvingPost || this.postResolveSequence !== resolveSequence) {
         return;
       }
@@ -711,7 +714,7 @@ export struct MessageCenterPage {
       this.statusMessage = '';
       this.pathStack.pushPathByName('ThreadDetail', createThreadRouteParams(
         result.payload.threadId, result.payload.title.length > 0 ? result.payload.title : item.title,
-        0, result.payload.page, result.payload.floor, '', false, 1, item.postId));
+        0, result.payload.page, result.payload.floor, '', false, 1, item.postId, false, 1, true));
     } catch (_error) {
       if (this.isResolvingPost && this.postResolveSequence === resolveSequence) {
         this.failPostResolution('暂时无法读取这条提醒，请稍后重试。');

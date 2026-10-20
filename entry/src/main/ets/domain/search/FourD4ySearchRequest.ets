@@ -48,6 +48,16 @@ function encodeQueryBytes(bytes: number[]): string {
   return encoded;
 }
 
+/** NG's profile search is an exact UID request, independent of form controls. */
+export function buildFourD4yAuthorIdSearchRequestUrl(forumRoot: string, userId: string,
+  forumId: string): string | null {
+  if (forumRoot !== 'https://www.4d4y.com/forum/' || !/^[1-9]\d{0,19}$/.test(userId) ||
+    (forumId !== 'all' && !/^[1-9]\d*$/.test(forumId))) {
+    return null;
+  }
+  return forumRoot + 'search.php?srchfid=' + forumId + '&srchfrom=0&searchsubmit=yes&srchuid=' + userId;
+}
+
 /**
  * Builds the read-only contract used by the current HarmonyOS MY 4D4Y
  * client. NG's older contract remains useful as parser evidence, but its
@@ -70,13 +80,7 @@ export function buildFourD4ySearchRequestUrl(forumRoot: string, form: FourD4ySea
   const queryParts: string[] = [];
   if (mode === FourD4ySearchMode.Author) {
     if (/^\d+$/.test(normalizedKeyword) && form.hasAuthorIdField) {
-      queryParts.push('mod=forum', 'searchsubmit=yes', 'srchuid=' + normalizedKeyword,
-        'srchtype=title', 'orderby=lastpost', 'ascdesc=desc');
-      if (requestedForumId !== 'all') {
-        queryParts.push('srchfid%5B0%5D=' + requestedForumId);
-      }
-      queryParts.push('page=1');
-      return forumRoot + 'search.php?' + queryParts.join('&');
+      return buildFourD4yAuthorIdSearchRequestUrl(forumRoot, normalizedKeyword, requestedForumId);
     }
   }
 

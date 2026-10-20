@@ -522,8 +522,9 @@ export default function fourD4yContractTest() {
         'srchuname=Curnane&srchtype=title&orderby=lastpost&ascdesc=desc&srchfid%5B0%5D=51&page=1');
       const authorUidUrl = buildFourD4ySearchRequestUrl('https://www.4d4y.com/forum/', form,
         FourD4ySearchMode.Author, '12345', '51');
-      expect(authorUidUrl).assertEqual('https://www.4d4y.com/forum/search.php?mod=forum&searchsubmit=yes&' +
-        'srchuid=12345&srchtype=title&orderby=lastpost&ascdesc=desc&srchfid%5B0%5D=51&page=1');
+      // UID searches use NG's dedicated contract, not the title-search route.
+      expect(authorUidUrl).assertEqual('https://www.4d4y.com/forum/search.php?srchfid=51&srchfrom=0&' +
+        'searchsubmit=yes&srchuid=12345');
       // The host-side hvigor test runtime does not provide the device GBK
       // codec. Device regression verifies the actual `%D6%D0%CE%C4` bytes;
       // here, keep this test valid on both host and HarmonyOS runtimes.

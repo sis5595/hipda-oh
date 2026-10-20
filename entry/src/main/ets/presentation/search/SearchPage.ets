@@ -14,7 +14,8 @@ import { FourD4ySearchFormPayload, FourD4ySearchMode, FourD4ySearchPagePayload,
   isAllowedFourD4ySearchPageUrl, isExpectedFourD4ySearchFormPayload,
   isExpectedFourD4ySearchPagePayload, isFourD4ySearchModeSupported,
   parseFourD4ySearchFormPayload } from '../../domain/search/FourD4ySearchContracts';
-import { buildFourD4ySearchRequestUrl } from '../../domain/search/FourD4ySearchRequest';
+import { buildFourD4ySearchRequestUrl, buildFourD4yAuthorIdSearchRequestUrl } from
+  '../../domain/search/FourD4ySearchRequest';
 import { createThreadRouteParams } from '../thread/ThreadRouteState';
 import { SearchRouteParams } from './SearchRouteState';
 
@@ -647,8 +648,11 @@ export struct SearchPage {
     } else {
       this.addHistory({ keyword: normalizedKeyword, mode: this.selectedMode, forumId: this.selectedForumId });
     }
-    const searchUrl: string | null = buildFourD4ySearchRequestUrl(FourD4ySession.forumRoot,
-      this.searchForm, this.selectedMode, normalizedKeyword, this.selectedForumId);
+    const searchUrl: string | null = this.selectedMode === FourD4ySearchMode.Author &&
+      this.profileSearchUserId.length > 0 && normalizedKeyword === this.profileSearchUserId ?
+      buildFourD4yAuthorIdSearchRequestUrl(FourD4ySession.forumRoot, this.profileSearchUserId,
+        this.selectedForumId) : buildFourD4ySearchRequestUrl(FourD4ySession.forumRoot,
+        this.searchForm, this.selectedMode, normalizedKeyword, this.selectedForumId);
     if (searchUrl === null) {
       this.failSearchLoad(loadSequence, '当前 4D4Y 搜索请求无法按已验证的 GBK 契约编码。');
       return;
