@@ -2,6 +2,17 @@
   "module": {
     "name": "entry_test",
     "type": "feature",
+    "mainElement": "TestAbility",
+    "pages": "$profile:test_pages",
+    "abilities": [
+      {
+        "name": "TestAbility",
+        "srcEntry": "./ets/testability/TestAbility.ets",
+        "startWindowIcon": "$media:startIcon_hipdaoh",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true
+      }
+    ],
     "deviceTypes": [
       "phone"
     ],

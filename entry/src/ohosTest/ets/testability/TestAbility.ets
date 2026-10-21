@@ -10,11 +10,14 @@ import testsuite from '../test/List.test';
  * still declares TestAbility as its entry point.
  */
 export default class TestAbility extends UIAbility {
-  private readonly delegator: abilityDelegatorRegistry.AbilityDelegator =
-    abilityDelegatorRegistry.getAbilityDelegator();
-
-  onCreate(_want: Want, _launchParam: AbilityConstant.LaunchParam): void {
-    Hypium.hypiumTest(this.delegator, abilityDelegatorRegistry.getArguments(), testsuite);
+  onCreate(want: Want, _launchParam: AbilityConstant.LaunchParam): void {
+    // Explicit device-only UI probe; never included in the distribution HAP.
+    const manualUpdater: boolean = want.parameters?.['manualGitHubUpdate'] === true;
+    AppStorage.setOrCreate<boolean>('manualGitHubUpdate', manualUpdater);
+    if (!manualUpdater) {
+      const delegator: abilityDelegatorRegistry.AbilityDelegator = abilityDelegatorRegistry.getAbilityDelegator();
+      Hypium.hypiumTest(delegator, abilityDelegatorRegistry.getArguments(), testsuite);
+    }
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
