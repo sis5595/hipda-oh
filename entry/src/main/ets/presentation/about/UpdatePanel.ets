@@ -1,4 +1,4 @@
-import { common, Want } from '@kit.AbilityKit';
+import { common, Want, wantConstant } from '@kit.AbilityKit';
 import { fileUri } from '@kit.CoreFileKit';
 import { uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { systemShare } from '@kit.ShareKit';
@@ -39,8 +39,9 @@ export struct UpdatePanel {
           Text(String(this.percent) + '%').fontSize(13).fontColor($r('app.color.text_secondary'));
           Button('取消下载').onClick(() => { this.service?.cancel(); });
         } else if (this.verifiedPath.length > 0) {
+          Button('用小白助手打开').enabled(!this.busy).onClick(() => { void this.openInstaller(); });
           Button('分享已校验的安装包').enabled(!this.busy).onClick(() => { void this.share(); });
-          Text('请在系统面板中选择兼容的安装工具。若没有小白助手，请用下面的下载网页在电脑上安装。分享不代表安装成功。')
+          Text('若无法打开小白，可在分享面板中“另存为”，再到小白选择该文件，或用电脑安装。打开工具不代表安装成功。')
             .fontSize(13).fontColor($r('app.color.text_secondary')).width('100%');
         } else {
           Button('下载 / 重新下载 HAP').enabled(!this.busy).onClick(() => { void this.download(); });
@@ -98,6 +99,37 @@ export struct UpdatePanel {
       if (this.alive) this.status = updateErrorMessage((error as Error).message);
     } finally {
       if (this.alive) { this.busy = false; this.downloading = false; }
+    }
+  }
+
+  private async openInstaller(): Promise<void> {
+    if (this.busy || this.candidate === undefined || this.verifiedPath.length === 0) return;
+    this.busy = true;
+    const service: GitHubUpdateService = new GitHubUpdateService();
+    this.service = service;
+    try {
+      await service.verifyForSharing(this.candidate, this.verifiedPath);
+      if (!this.alive) return;
+      const want: Want = {
+        bundleName: 'com.xiaobai.hap_installer',
+        action: 'ohos.want.action.viewData',
+        uri: fileUri.getUriFromPath(this.verifiedPath),
+        flags: wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION
+      };
+      await (this.getUIContext().getHostContext() as common.UIAbilityContext).startAbility(want);
+      if (this.alive) this.status = '已交给小白助手。请核对版本，沿用原签名安装；安装结果以小白提示为准。';
+    } catch (error) {
+      if (this.alive) {
+        const reason: string = (error as Error).message;
+        if (reason.startsWith('update-')) {
+          if (reason === 'update-checksum') this.verifiedPath = '';
+          this.status = updateErrorMessage(reason);
+        } else {
+          this.status = '无法打开小白助手。请确认已安装手机版，或用“分享已校验的安装包”另存为文件，再到小白选择；也可用电脑安装。';
+        }
+      }
+    } finally {
+      if (this.alive) this.busy = false;
     }
   }
 
