@@ -1,5 +1,6 @@
 import { bundleManager, common, Want } from '@kit.AbilityKit';
 import { FOUR_D4Y_PRIVACY_CONTACT } from '../../domain/privacy/FourD4yPrivacyPolicy';
+import { UpdatePanel } from './UpdatePanel';
 
 /** Reads the installed bundle, not a source-code version string. No forum request is made here. */
 @Component
@@ -37,7 +38,11 @@ export struct AboutPage {
             }
           }.width('100%').alignItems(HorizontalAlign.Start);
           Divider().color($r('app.color.border'));
+          UpdatePanel({ installedCode: this.versionCode });
+          Divider().color($r('app.color.border'));
           this.buildWebLink('项目与下载', 'github.com/sis5595/hipda-oh', 'https://github.com/sis5595/hipda-oh');
+          this.buildWebLink('安装、升级与续期帮助', '普通用户教程',
+            'https://github.com/sis5595/hipda-oh#如何安装');
           this.buildWebLink('反馈问题', 'GitHub Issues', 'https://github.com/sis5595/hipda-oh/issues');
           Text('联系邮箱：' + FOUR_D4Y_PRIVACY_CONTACT)
             .fontSize(15).fontColor($r('app.color.text_body')).width('100%')

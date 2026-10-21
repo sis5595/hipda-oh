@@ -16,11 +16,15 @@
 
 从 [GitHub Releases](https://github.com/sis5595/hipda-oh/releases/tag/v1.0.0-beta.5) 下载 `hipda-oh-1.0.0-beta.5-unsigned.hap`，源码 ZIP 不能直接安装。历次更新见[更新记录](CHANGELOG.md)。
 
-**目前尚未上架应用商店，现阶段只能侧载。** 项目正在积极准备上架境外华为 AppGallery，希望未来可通过海外商店正常下载安装和更新，但不承诺具体日期。
+**目前未上架应用商店，通过 GitHub 下载后侧载安装。** 安装需要你自己的华为开发者账号和安装工具，不是点击 HAP 就能安装。
 
 当前构建面向 HarmonyOS 6.1.1 及以上的原生鸿蒙设备，不适用于 Android。
 
 ## 如何安装
+
+- **第一次使用：**[首次安装教程](docs/INSTALL.md)
+- **已经装过：**[日常升级教程](docs/UPDATE.md)
+- **到期或遇到错误：**[证书续期与常见问题](docs/RENEWAL.md)
 
 1. 从 [Releases](https://github.com/sis5595/hipda-oh/releases) 下载 Beta 的 `.hap` 附件（不是源码 ZIP）。
 2. 使用[小白调试助手（Auto-installer）](https://github.com/likuai2010/auto-installer)，按工具提示为自己的设备完成签名和安装。

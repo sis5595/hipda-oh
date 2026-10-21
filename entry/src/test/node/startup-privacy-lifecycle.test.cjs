@@ -33,7 +33,7 @@ const EntryAbility = execute(fs.readFileSync(path.join(root, 'entryability/Entry
 const tick = () => new Promise(resolve => setImmediate(resolve));
 (async () => {
   assert.equal(store.POLICY_VERSION, policy.FOUR_D4Y_PRIVACY_POLICY_VERSION);
-  for (const previous of ['', '2026-09-20', '2026-10-10']) {
+  for (const previous of ['', '2026-09-20', '2026-10-10', '2026-10-11']) {
     raw = previous;
     assert.equal(await store.hasAcceptedCurrentPolicy({}), false, 'old or absent consent must be renewed');
   }

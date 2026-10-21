@@ -1,6 +1,6 @@
 /** Content shared by the first-run consent screen and the in-app policy page. */
 export const FOUR_D4Y_PRIVACY_POLICY_TITLE: string = 'HiPDA·OH 隐私政策';
-export const FOUR_D4Y_PRIVACY_POLICY_VERSION: string = '2026-10-11';
+export const FOUR_D4Y_PRIVACY_POLICY_VERSION: string = '2026-10-20';
 export const FOUR_D4Y_PRIVACY_POLICY_UPDATED_AT: string =
   FOUR_D4Y_PRIVACY_POLICY_VERSION.slice(0, 4) + ' 年 ' +
   Number(FOUR_D4Y_PRIVACY_POLICY_VERSION.slice(5, 7)) + ' 月 ' +
@@ -66,5 +66,13 @@ export const FOUR_D4Y_PRIVACY_POLICY_SECTIONS: FourD4yPrivacyPolicySection[] = [
   {
     title: '八、搜索历史补充说明',
     content: '搜索页会在本机保存最近的搜索关键词、搜索方式和版面范围，方便你再次执行相同搜索；不保存搜索结果正文、完整链接、Cookie 或密码。你可在搜索页清空该历史；清除应用数据或卸载应用也会清除该历史。'
+  },
+  {
+    title: '九、手动检查更新',
+    content: '只有你在“关于”中主动检查、下载或分享安装包时，应用才连接官方 GitHub API、源码和发布附件服务器。' +
+      'GitHub 会收到正常网络连接所需的 IP 地址和应用更新请求；请求不携带论坛 Cookie、账号、私信、阅读历史或 GitHub Token。' +
+      '安装包保存在应用私有缓存中，下次下载时替换，也可能被系统清理；不会自动安装。' +
+      '你选择系统分享后，仅把安装包交给所选应用，不分享论坛数据。安装工具的华为账号、签名材料及续期由该工具独立管理，' +
+      'HiPDA·OH 不读取或保存这些信息。你可以不使用更新检查功能，改在浏览器下载。'
   }
 ];
