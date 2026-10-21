@@ -63,6 +63,8 @@ HTTP 使用独立匿名请求，不复用 4D4Y WebView/会话。逐跳拦截器�
 
 ### 可选实机测试入口（仅开发者）
 
+2026-10-22 网络恢复后，测试入口以 `1000005` 为输入识别出官方 beta.5，原生下载完成并通过 SHA-256 校验，系统分享打开成功。对应官方附件为 1,525,065 字节，SHA-256 `8051c4f3e9fd71e127ceca140f2747f4350098f475458fbe332778bb5fba2d2f`。全部分享方式中未出现小白 3.1；通过“另存为 → Download → 手机小白选择文件”成功识别应用名、beta.5 版本及包名。未点击自动签名，因当前 HiPDA·OH 开发者签名与小白现有签名不同，不能据此宣称无损覆盖或续期已验证。尚未验证显式 viewData 交接，暂保留标准系统分享与文件选取路线。
+
 `ohosTest` 包显式声明自定义 TestAbility、页面资源及 TestRunner，避免新版 Hvigor 使用自动生成的 Hello World 页面。构建入口为 `--mode module -p product=default -p module=entry@ohosTest -p buildMode=release assembleHap`；它不是用户分发包。测试安装前必须核对同签名及版本，禁止用卸载重装绕过签名冲突。
 
 安装测试模块后可执行 `hdc shell aa start -a TestAbility -b com.sis5595.hipdaoh -m entry_test --pb manualGitHubUpdate true`。此入口复用生产 UpdatePanel；默认读取实际版本号，也可明确切换为模拟旧版 `1000005`，以下载已发布 beta.5，既不降级设备上的应用，也不修改正式发布元数据。收到安装文件后停止，不自动执行签装或续期。普通 Instrument Test 仍走 TestRunner/Hypium。
