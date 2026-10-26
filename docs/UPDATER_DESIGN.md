@@ -1,84 +1,47 @@
 # 更新与侧载：维护者说明
 
-普通用户请看[首次安装](INSTALL.md)、[日常升级](UPDATE.md)、[续期](RENEWAL.md)。本页不是用户安装步骤。
+普通用户请看[首次安装](INSTALL.md)、[日常升级](UPDATE.md)、[续期](RENEWAL.md)。本页说明更新接口及发布约定。
 
 ## 路线
 
-不维护签名器、证书服务器或 Windows 安装助手。首次通过现成电脑工具引导安装；HiPDA·OH 仅提供官方发布检查、下载、完整性校验和系统文件分享。手机安装工具独立负责登录、签名、设备连接与用户确认安装。
+首次安装、签名、设备连接和续期复用现成工具。HiPDA·OH 提供官方发布检查、下载、完整性校验、交给手机小白助手以及系统文件分享，不维护签名器、证书服务或 Windows 安装助手。
 
-定向交接复用 Kazumi 的 `viewData + file URI + com.xiaobai.hap_installer` 实现，仅授予读取所选 HAP 的权限，不授予写权限。该系统接口和系统分享不同。真机已确认文件接收，提供“用小白助手打开”；工具缺失时回退到系统分享/另存为和电脑安装提示。交接前重新校验 SHA-256，校验失败禁止打开工具。
+定向交接参考 [Kazumi 的原生桥接](https://github.com/ErBWs/Kazumi/blob/f7a482e9142d84500daca7fbaea7efe6ac64c111/ohos/entry/src/main/ets/entryability/MethodCall.ets)，使用系统 `viewData`、文件 URI 和目标包名 `com.xiaobai.hap_installer`，仅授予读取所选 HAP 的权限。小白官方 HAP 的清单声明了该接收入口；本项目已经实机确认接收文件。系统分享面板未列出小白时，可用定向交接或“另存为 → 小白选包”。
 
-已只读检查小白 3.1 官方 HAP 的 `module.json`：`com.xiaobai.hap_installer/EntryAbility` 为 exported，声明 `sendData` / `viewData`、file scheme 和 `openharmony.package` 类型。真机中系统分享未列出小白，但定向 viewData 能接收文件；不能据此断言所有系统分享面板均不支持小白。其清单版本显示 `1.0.0 / 1`，教程须以官方发布文件与实际界面识别 3.1，不用该字段冒认工具版本。小白公开仓库当前没有可审阅的完整实现源码，此结论依据官方 HAP 清单、Kazumi 源码和实际界面。
+## 发布约定
 
-## 发布契约
+- 使用官方仓库的 Releases 列表，包含 Pre-release，跳过 Draft 和没有 HAP 的发布。匿名访问，不要求 GitHub Token。
+- Tag 格式为 `v1.0.0-beta.6`、`v1.0.0` 或 `v1.0.0.4`。
+- 同一 Tag 的 `AppScope/app.json5` 保持可用 `JSON.parse` 读取的 JSON 子集，包含正确包名、版本名和正整数 `versionCode`。不执行 JSON5/JS。
+- 附件为 `hipda-oh-<versionName>-unsigned.hap` 和 `SHA256SUMS.txt`，URL 属于同一官方 Release；校验文件采用 SHA-256、两个空格及文件名的标准格式。
+- 仅用 `versionCode` 比较版本，不根据 Beta 字符串、日期或发布排序推断新旧。发行前核对 HAP、Tag 源码及校验文件一致。
+- 不修改已发布版本的 Tag 或附件；候选包经确认后再发布。
+- 当前上限：HAP 64 MiB、校验文件 16 KiB、API 2 MiB、最多 24 个可安装 Release。触及上限明确报错，不将不完整检查显示为“最新”。接近上限前需实现经过验证的分页或索引。
 
-- 使用 GitHub Releases 列表，而不是排除预发布的 `latest`。匿名访问，不配置 Token。
-- 跳过 Draft 和没有 HAP 的源码-only 发布。beta.1 属于后一种。
-- 每个可安装 Release 的 tag 形如 `v1.0.0-beta.6`、`v1.0.0` 或 `v1.0.0.4`。
-- 同一 tag 的 `AppScope/app.json5` 须保持可用 `JSON.parse` 读取的 JSON 子集，并包含正确的 `bundleName`、`versionName`、正整数 `versionCode`。不执行 JSON5/JS。版本名须与 tag 一致。
-- 附件严格使用 `hipda-oh-<versionName>-unsigned.hap` 和 `SHA256SUMS.txt`；后者为标准 SHA-256 两空格文件名格式。文件名和 URL 均须属于同一官方 Release。
-- 版本比较仅依据标签源码中的 `versionCode`，不依据 beta 字符串顺序、发布日期、草稿或附件上传时间。发行前务必核对 HAP 内版本与标签源码一致。
-- 不改动 beta.5 或历史 tag、附件。新版本建议使用 beta.6 / 1000007，需验收与发布授权后确定。
-- 当前安全上限：单 HAP 64 MiB、校验文件 16 KiB、API 2 MiB、最多 24 个可安装 Release。触及上限明确失败，不把不完整检查说成“最新”；发布数量接近上限前需改为经过验证的分页/索引方案。
+## 网络和文件边界
 
-## 边界与失败处理
+HTTP 请求独立于论坛会话，不携带论坛 Cookie、账号或 GitHub Token。逐跳拦截器仅允许 HTTPS 官方 API、该仓库标签源码及发布附件路径和 GitHub 附件 CDN。拦截器不可用时停止请求，最多五次重定向，设置连接/读取超时及总截止时间，不跳过证书校验。
 
-HTTP 使用独立匿名请求，不复用 4D4Y WebView/会话。逐跳拦截器仅允许 HTTPS 官方 GitHub API、该仓库标签源码/附件路径及 GitHub 附件 CDN；拦截器不可用时失败关闭。禁用缓存，设连接/读取超时，最多五次重定向。
+文件流式写入私有缓存，限制字节数，同时等待成功响应和 `dataEnd`，不假定回调顺序。大小和 SHA-256 均正确后才改名为 HAP；半成品不供交接。取消、失败或页面退出会中止请求，清理半成品，并防止迟到回调更新已销毁的页面。只清理本更新器拥有的文件名，不触碰论坛数据或用户文档。
 
-流式落盘，限制字节数；`.part` 不供分享。同时等待成功响应码与 `dataEnd`，不假定两个回调的先后顺序；120 秒总截止时间及显式取消能解除缺失结束回调的等待。大小及 SHA-256 均正确才改名为 HAP；取消、失败清理半成品。分享前再次校验。系统分享仅授予所选文件的访问，不增加存储权限。页面销毁取消请求，不更新已销毁页面。
+打开小白或系统分享前再次校验文件。校验失败时停止；工具缺失时提示分享/另存为及电脑安装路径。交接成功不代表安装成功，安装工具仍须由用户确认。隐私说明覆盖主动 GitHub 请求、缓存和文件交接；不改变 Cookie 安全存储。
 
-校验保护传输完整性，不是独立签名认证，也不保证系统或安装工具一定接受 HAP。分享成功不等于安装成功。没有兼容分享目标则提示浏览器/电脑路径，不自动下载安装器或卸载原应用。
+## 验证范围
 
-隐私政策补充主动 GitHub 请求及安装文件缓存，使用统一新政策版本重新征得同意；不改变现有 Cookie 安全存储。
+版本检测、下载、校验、系统分享、另存为、小白选包和定向交接已实机验证。原签名 beta.5 到 beta.6 候选版的递增版本覆盖，以及当前账号、设置、可见浏览记录保留已验证；不代表检查了全部本地数据。
 
-## 已核查的上游依据（2026-10-20）
+小白 3.1 在“直接安装”完成后可能保存历史失败；[上游同类反馈](https://github.com/likuai2010/auto-installer/issues/120) 尚无作者确认的通用修复。小白自身选择“使用当前证书”续期，本轮也遇到待重签文件打不开，系统记录确认未重新安装。因此 HiPDA·OH 的自动重签、续期及续期后数据保留仍待验收，不能宣传为一键安装/一键续期已经完整打通。
 
-| 来源 | 能支持的判断 | 不足以证明的内容 |
-|---|---|---|
-| [小白 3.1 发布说明](https://github.com/likuai2010/auto-installer/releases/tag/3.1.0) | 登录保留、续期、日历提醒，升级助手需 2.5+；下载目录有账号/备份 | 所有设备均成功、账号永不过期、无损跨签名 |
-| [Kazumi 安装说明](https://kazumi.app/docs/misc/how-to-install-in-ohos/) | 电脑首次装手机助手、后续手机更新的社区路线 | 本项目分享面板一定能列出小白；文档部分旧版 Java 描述不应照搬到 3.1 |
-| [Kazumi 原生桥接](https://github.com/ErBWs/Kazumi/blob/f7a482e9142d84500daca7fbaea7efe6ac64c111/ohos/entry/src/main/ets/entryability/MethodCall.ets) | `openWithInstaller` 的真实跨应用调用 | 不代表 HiPDA·OH 已实测；不可照搬写权限授权 |
-| [小白 #124](https://github.com/likuai2010/auto-installer/issues/124) | 最新反馈可能缺少自身续期入口 | 发布日志的按钮并非所有人可见 |
-| [小白 #118](https://github.com/likuai2010/auto-installer/issues/118)、[#116](https://github.com/likuai2010/auto-installer/issues/116) | 签名/选包仍会失败；有用户使用 HoKit 选包成功 | 不能推导重置证书或换安装器必然无损 |
-| [HoKit Releases](https://github.com/yabi-zzh/HoKit/releases)、[Issues](https://github.com/yabi-zzh/HoKit/issues) | 桌面工具仍维护；近期修复网络、重签/设备相关错误 | 不等同手机版能力，不能把投屏服务 HAP 当手机签装器 |
-| [HoKit 作者应用的推荐](https://github.com/yabi-zzh/livify-ohos)、[手机入口](https://gitcode.com/yabi-zzh/HoKit-App) | 可追溯的手机版入口 | 手机仓库页面未提供可审阅接口代码，未验证数据迁移 |
-| [GitHub Releases API](https://docs.github.com/en/rest/releases/releases#list-releases) | 公开发布及附件查询契约 | `latest` 不满足 Beta 检查需求 |
-| [华为调试证书说明](https://developer.huawei.com/consumer/en/doc/app/agc-help-add-debugcert-0000001914263178) | 证书有期限 | 证书期限不等于每份应用 Profile 的运行期限 |
+离线回归覆盖版本判断、限流、下载进度、损坏阻断、取消、存储错误、分享前重校验、安装器缺失和页面销毁回调。`scripts/verify-github-update.cjs <SDK typescript.js> [installedVersionCode]` 可匿名核对现有发布和文件校验值，不写 GitHub、不安装软件。`ohosTest` 提供可选实机入口，测试样本、签名材料和调试记录仅保留本地。
 
-也核对本机 HarmonyOS SDK 的 `HttpInterceptorChain`、`requestInStream`、`file.hash` 和现有图片分享的 `ShareController` 用法。NG/MY4D4Y 的论坛逻辑不是鸿蒙签名依据，本任务不因此改动论坛业务。
+## 参考来源
 
-## 开发验证与发布前验收
+- [小白 3.1 发布说明](https://github.com/likuai2010/auto-installer/releases/tag/3.1.0)：登录保留、无线端口、续期、日历提醒及直接安装已签名 HAP。
+- [Kazumi 安装说明](https://kazumi.app/docs/misc/how-to-install-in-ohos/)：电脑引导安装手机助手；旧版界面及 Java 说明不能照搬到 3.1。
+- [小白历史/续期反馈 #108](https://github.com/likuai2010/auto-installer/issues/108)、[续期入口反馈 #124](https://github.com/likuai2010/auto-installer/issues/124)：发布说明不代表所有设备均可用。
+- [小白选包反馈 #116](https://github.com/likuai2010/auto-installer/issues/116)：有用户尝试 HoKit，但不证明跨工具签名及数据保留。
+- [HoKit 桌面版](https://github.com/yabi-zzh/HoKit)、[手机版入口](https://gitcode.com/yabi-zzh/HoKit-App)、[作者应用的推荐](https://github.com/yabi-zzh/livify-ohos)：仅作备选，未验证本项目的手机交接或无损迁移。
+- [GitHub Releases API](https://docs.github.com/en/rest/releases/releases#list-releases)：公开发布与附件查询。
+- [华为调试证书说明](https://developer.huawei.com/consumer/en/doc/app/agc-help-add-debugcert-0000001914263178)：证书期限与应用设备授权期限分别核对。
 
-离线测试入口：现有 `run-regressions.cjs` 自动包含 `github-update.test.cjs`。该测试运行真实生产策略/服务方法，以受控网络及文件适配器覆盖版本、边界、进度、损坏、取消、磁盘失败、限流、分享前重校验，不连接手机。
-
-`scripts/verify-github-update.cjs <SDK typescript.js> [installedVersionCode]` 是开发者只读联网检查，匿名验证现有 Releases 和 HAP SHA-256，不写 GitHub、不安装软件。它验证数据源与策略，不冒充 HarmonyOS 原生传输测试。
-
-发布前须人工核对：
-
-2026-10-21 的阶段性实机结果：已核对本地测试包与 Mate 60 原安装包的签名证书指纹、应用标识及包名一致；经用户允许，覆盖安装成功，系统报告 `1.0.0-beta.5 / 1000006`。新版隐私政策重新确认页正常出现。此为开发者原签名测试包，**不是小白 3.1 签装验收**；论坛账号、偏好、阅读记录保留及安装工具交接仍需继续核对。该测试包没有替换 GitHub 已发布 beta.5。
-
-同日 Windows 小白 3.1 首次签装手机版已成功，HDC 及实际启动均确认 `com.xiaobai.hap_installer` 已安装。最初“当前证书不存在”通过恢复与原证书公钥匹配的本地私钥和 CSR、重新选用原证书解决；没有重置证书。手机首次显示日历提醒权限，由用户自行允许。随后手机端登录、电脑“一键同步”、手机“始终信任”及连接本机均成功。对 HiPDA·OH 的小白签装和续期仍待验收，不等同于助手自身安装成功。
-
-2026-10-21 至 22 日补充验证：原签名覆盖后论坛登录账号和主题/字号/行距/图片/小尾巴设置保留；阅读记录没有完整的安装前基线，暂不宣称全部数据验收通过。手机开启用户现有代理后，正式“关于”页正确显示“当前已是最新版本（包含 Beta 版）”。此前超时及次日 TLS 建连失败均被阻断并显示网络提示，没有绕过 HTTPS 校验。
-
-### 可选实机测试入口（仅开发者）
-
-2026-10-22 网络恢复后，测试入口以 `1000005` 为输入识别出官方 beta.5，原生下载完成并通过 SHA-256 校验，系统分享打开成功。对应官方附件为 1,525,065 字节，SHA-256 `8051c4f3e9fd71e127ceca140f2747f4350098f475458fbe332778bb5fba2d2f`。全部分享方式中未出现小白 3.1；通过“另存为 → Download → 手机小白选择文件”成功识别应用名、beta.5 版本及包名。
-
-随后新增并验证定向 viewData：先在小白选另一测试包，再由测试入口发送原签名 HiPDA·OH 样本；小白的选包从另一应用变为 HiPDA·OH，证明实际接收而非保留上次选择。接收仅需读取 URI 权限。已核对本地原签名样本的证书指纹和 app-identifier 与已安装应用一致，官方签名工具 verify-app 通过。用户授权后尝试小白“直接安装（需要已签名的文件）”，两次均止于“设备未连接”，没有安装成功；端口仍在监听，正在等待通过电脑小白的一键同步恢复连接。未重置证书、卸载或清空数据。
-
-`ohosTest` 包显式声明自定义 TestAbility、页面资源及 TestRunner，避免新版 Hvigor 使用自动生成的 Hello World 页面。构建入口为 `--mode module -p product=default -p module=entry@ohosTest -p buildMode=release assembleHap`；它不是用户分发包。测试安装前必须核对同签名及版本，禁止用卸载重装绕过签名冲突。
-
-安装测试模块后可执行 `hdc shell aa start -a TestAbility -b com.sis5595.hipdaoh -m entry_test --pb manualGitHubUpdate true`。此入口复用生产 UpdatePanel；默认读取实际版本号，也可明确切换为模拟旧版 `1000005`，以下载已发布 beta.5，既不降级设备上的应用，也不修改正式发布元数据。收到安装文件后停止，不自动执行签装或续期。普通 Instrument Test 仍走 TestRunner/Hypium。
-
-可选的 `local-signed-probe.hap` 由开发者在本机复制到测试 rawfile，供验证原签名文件交接；缺少样本时显示提示，仍可使用其他测试入口。该样本由 `.gitignore` 排除，不提交、不作为用户分发包。任何直接安装前均须独立核对签名与版本；测试入口不会点击安装。
-
-- [ ] Windows 3.1 首次安装小白手机版和 HiPDA·OH，补真实、脱敏后的教程截图。
-- [x] 手机检查无新版/有新版、网络失败重试、原生下载和校验、系统分享、另存为及小白选包。
-- [x] 小白 3.1 接收定向 viewData HAP；系统分享未列出小白，文件选取备用路线已实测。
-- [ ] 手机取消下载/退出页面的实机验收；离线安全回归已通过。
-- [ ] 原签名覆盖升级后版本正确，论坛账号、主题/字号、浏览记录保留。
-- [ ] 小白一键续期后再核对以上数据；实际按钮、日期提醒、登录恢复截图。
-- [ ] HoKit 只作备选；跨工具数据保留未验证时不推荐普通用户迁移。
-- [ ] 新版 HAP 内 versionCode、版本名、包名与 tag 源码一致，SHA256SUMS 匹配。
-- [ ] 不发布开发记录、账号文件、调试签名、密码或设备绑定包；经用户确认再创建新 Release。
+实现同时核对本机 HarmonyOS SDK 的 HTTP 拦截器、流式请求、文件哈希、URI 读权限及系统分享 API。NG/MY4D4Y 的论坛逻辑不作为鸿蒙签名依据。
