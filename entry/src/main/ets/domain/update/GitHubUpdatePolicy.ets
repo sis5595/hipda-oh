@@ -123,7 +123,7 @@ export function updateErrorMessage(code: string): string {
   switch (code) {
     case 'update-rate-limit': return 'GitHub 暂时限制了访问次数，请稍后再试，也可打开下载网页。';
     case 'update-metadata': return '此版本的发布信息不完整或格式暂不支持，无法安全判断更新。请打开下载网页。';
-    case 'update-checksum': return '安装包校验失败，已禁止交接。请重新下载；仍失败时请反馈，不要安装此文件。';
+    case 'update-checksum': return '安装包校验失败，已禁止分享和保存。请重新下载；仍失败时请反馈，不要安装此文件。';
     case 'update-storage': return '无法保存安装包，请检查手机剩余空间后重试。';
     case 'update-installed-version': return '未能读取当前版本，请返回后重试。';
     case 'update-cancelled': return '已取消下载。';

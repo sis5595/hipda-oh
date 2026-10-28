@@ -1,6 +1,6 @@
 /** Content shared by the first-run consent screen and the in-app policy page. */
 export const FOUR_D4Y_PRIVACY_POLICY_TITLE: string = 'HiPDA·OH 隐私政策';
-export const FOUR_D4Y_PRIVACY_POLICY_VERSION: string = '2026-10-20';
+export const FOUR_D4Y_PRIVACY_POLICY_VERSION: string = '2026-10-29';
 export const FOUR_D4Y_PRIVACY_POLICY_UPDATED_AT: string =
   FOUR_D4Y_PRIVACY_POLICY_VERSION.slice(0, 4) + ' 年 ' +
   Number(FOUR_D4Y_PRIVACY_POLICY_VERSION.slice(5, 7)) + ' 月 ' +
@@ -69,10 +69,12 @@ export const FOUR_D4Y_PRIVACY_POLICY_SECTIONS: FourD4yPrivacyPolicySection[] = [
   },
   {
     title: '九、手动检查更新',
-    content: '只有你在“关于”中主动检查、下载或分享安装包时，应用才连接官方 GitHub API、源码和发布附件服务器。' +
+    content: '只有你在“关于”中主动检查、下载、分享或保存安装包时，应用才连接官方 GitHub API、源码和发布附件服务器。' +
       'GitHub 会收到正常网络连接所需的 IP 地址和应用更新请求；请求不携带论坛 Cookie、账号、私信、阅读历史或 GitHub Token。' +
       '安装包保存在应用私有缓存中，下次下载时替换，也可能被系统清理；不会自动安装。' +
-      '你选择“用小白助手打开”或系统分享后，仅把安装包交给所选应用，不分享论坛数据；交给小白时仅授予该文件的读取权限。' +
+      '分享或保存前会重新获取官方校验信息。“分享安装包”通过系统分享把安装包交给所选应用，不分享论坛数据；' +
+      '“保存安装包”通过系统文件选择器将安装包复制到你选定的位置，不申请广泛存储权限。导出的文件由你管理，' +
+      '清理应用缓存不会删除该副本。应用不绑定安装工具，不读取或管理工具的华为账号、用户证书或私钥，不执行签名、卸载或安装。' +
       '安装工具的华为账号、签名材料及续期由该工具独立管理，' +
       'HiPDA·OH 不读取或保存这些信息。你可以不使用更新检查功能，改在浏览器下载。'
   }

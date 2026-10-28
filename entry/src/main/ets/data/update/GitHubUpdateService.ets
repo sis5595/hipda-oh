@@ -108,7 +108,8 @@ export class GitHubUpdateService {
     }
   }
 
-  async verifyForSharing(candidate: GitHubUpdateCandidate, path: string): Promise<void> {
+  /** Installer-independent gate used by every file export, including future adapters. */
+  async verifyForExport(candidate: GitHubUpdateCandidate, path: string): Promise<void> {
     const expected: string = parseUpdateChecksum(await this.text(candidate.checksumUrl, 16384), candidate.fileName);
     if (fs.statSync(path).size !== candidate.size || (await hash.hash(path, 'sha256')).toLowerCase() !== expected) {
       throw new Error('update-checksum');

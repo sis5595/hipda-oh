@@ -146,9 +146,9 @@ function setup() {
   assert.equal(files.get(p).toString(), hap.toString());
   assert.equal(progress.at(-1)[0], hap.length);
   assert.equal(handles.size, 0);
-  await api.verifyForSharing(candidate, p);
+  await api.verifyForExport(candidate, p);
   files.set(p, Buffer.from('corrupted'));
-  await assert.rejects(api.verifyForSharing(candidate, p), /update-checksum/);
+  await assert.rejects(api.verifyForExport(candidate, p), /update-checksum/);
   setup();
   responses.set(candidate.downloadUrl, { body: Buffer.alloc(hap.length, 5) });
   await assert.rejects(new service.GitHubUpdateService().download(candidate, '/cache', () => {}), /update-checksum/);
