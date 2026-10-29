@@ -26,12 +26,25 @@ class Element {
     this.tagName = tag.toUpperCase();
     this.childNodes = children;
     this.attributes = attributes;
+    for (const child of children) child.parent = this;
     this.id = attributes.id || '';
     this.classList = { contains: value => (attributes.class || '').split(' ').includes(value) };
   }
   get textContent() { return this.childNodes.map(n => n.nodeValue || n.textContent || '').join(''); }
   getAttribute(name) { return this.attributes[name] || null; }
+  cloneNode() {
+    return new Element(this.tagName, this.childNodes.map(node => node.nodeType === 3 ?
+      text(node.nodeValue) : node.cloneNode(true)), { ...this.attributes });
+  }
+  remove() {
+    if (this.parent) this.parent.childNodes = this.parent.childNodes.filter(node => node !== this);
+  }
   querySelector(selector) {
+    if (selector === 'font[size="2"], .quoteauthor, .quote_author') {
+      return this.querySelectorAll('*').find(node =>
+        (node.tagName === 'FONT' && node.getAttribute('size') === '2') ||
+        node.classList.contains('quoteauthor') || node.classList.contains('quote_author')) || null;
+    }
     if (selector === 'font[size="1"], small') {
       return this.querySelectorAll('*').find(node => node.tagName === 'SMALL' ||
         (node.tagName === 'FONT' && node.getAttribute('size') === '1')) || null;
@@ -44,6 +57,9 @@ class Element {
     if (selector === '*') return descendants;
     if (selector === 'img') return descendants.filter(n => n.tagName === 'IMG');
     if (selector === 'a[href]') return descendants.filter(n => n.tagName === 'A' && n.getAttribute('href'));
+    if (selector === '[style*="display"][style*="none"]') {
+      return descendants.filter(n => /display\s*:\s*none/.test(n.getAttribute('style') || ''));
+    }
     return [];
   }
   closest() { return null; }
@@ -105,6 +121,59 @@ const status = new Element('i', [text('not body')], { class: 'pstatus' });
 assert.equal(value(text('甲'), status, text('乙')), '甲乙');
 console.log('PASS: inline continuity; explicit/blank/paragraph/pre line breaks; whitespace; media/link/status boundaries.');
 
+// Discuz's quote markup is also used for the author's own complete body.
+// Synthetic examples only: never persist the real user's forum page as a fixture.
+const quote = (...children) => new Element('div', children, { class: 'quote' });
+const plainQuote = extract(quote(element('blockquote', text('设备一'), element('br'),
+  new Element('font', [text('品牌：样例')], { size: '2' }), element('br'),
+  text('配置：A'), element('strong', text('B')), element('br'), element('br'),
+  text('价格：100'), element('br'), text('末行：完整保留'))))[0];
+assert.equal(plainQuote.kind, 'quote');
+assert.equal(plainQuote.value, '设备一\n品牌：样例\n配置：AB\n\n价格：100\n末行：完整保留');
+assert.equal(plainQuote.quoteAuthor, undefined);
+assert.equal(plainQuote.quotePostId, undefined);
+assert.equal(extract(quote(element('p', text('段一')), element('p', text('段二'))))[0].value, '段一\n段二');
+assert.equal(extract(quote(element('pre', text('甲\n  乙'))))[0].value, '甲\n  乙');
+assert.equal(extract(quote(text('回复 是正文用语'), element('br'), text('下一行')))[0].value,
+  '回复 是正文用语\n下一行', 'plain quote text must not be mistaken for a reply prefix');
+const topicLink = new Element('a', [text('相关主题')], { href: 'viewthread.php?tid=200' });
+assert.equal(extract(quote(text('参考：'), topicLink))[0].value, '参考：相关主题');
+assert.equal(extract(quote(text('甲\n  乙'), element('script', text('ignored')),
+  new Element('span', [text('hidden')], { style: 'display: none' }),
+  element('style', text('ignored')), element('br'), text('丙')))[0].value, '甲 乙\n丙');
+const sourceLink = new Element('a', [text('原帖')],
+  { href: 'redirect.php?goto=findpost&pid=12&ptid=100' });
+const replyQuote = extract(quote(text('摘要'), element('br'), text('下一行'),
+  new Element('font', [text('sample 发表于 2026-10-01 10:00'), sourceLink], { size: '2' })))[0];
+assert.equal(replyQuote.quoteAuthor, 'sample');
+assert.equal(replyQuote.quotePostId, '12');
+assert.equal(replyQuote.quoteThreadId, '100');
+assert.equal(replyQuote.value, '摘要下一行', 'reply previews retain their existing textContent semantics');
+const replyTarget = extract(quote(new Element('a', [text('回复 8# sample')],
+  { href: 'redirect.php?goto=findpost&pid=12&ptid=100' })))[0];
+assert.equal(replyTarget.quoteFloor, 8);
+assert.equal(replyTarget.quoteAuthor, 'sample');
+assert.equal(replyTarget.quotePostId, '12');
+const headerStart = source.indexOf('  private hasQuoteHeader(');
+const headerEnd = source.indexOf('  private openQuotedPost(', headerStart);
+const quoteUi = {};
+vm.runInNewContext(ts.transpileModule('class Reader {' + source.slice(headerStart, headerEnd) +
+  '} exports.Reader = Reader;', { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText,
+  { exports: quoteUi });
+const quoteReader = new quoteUi.Reader();
+assert.equal(quoteReader.hasQuoteHeader(plainQuote), false);
+assert.equal(quoteReader.hasQuoteHeader(replyQuote), true);
+assert.equal(quoteReader.hasQuoteHeader(replyTarget), true);
+const quoteUiStart = source.indexOf("} else if (content.kind === 'quote') {");
+const quoteUiEnd = source.indexOf("} else if (content.kind === 'link'", quoteUiStart);
+const quoteUiSource = source.slice(quoteUiStart, quoteUiEnd);
+assert.match(quoteUiSource, /if \(this.hasQuoteHeader\(content\)\) \{\s*Text\(content.value\)[\s\S]*?\.maxLines\(3\)/);
+const plainUiSource = quoteUiSource.slice(quoteUiSource.lastIndexOf('} else {'));
+assert.match(plainUiSource, /Text\(content.value\)/);
+assert.doesNotMatch(plainUiSource, /maxLines|textOverflow|\.height\(/,
+  'unattributed body quote must not inherit the reply preview limit');
+console.log('PASS: complete plain quote blocks, original line breaks, size-2 body text and reply attribution/targets.');
+
 const pagingStart = script.indexOf('  let lastPage =');
 const pagingEnd = script.indexOf('  const currentMatch =', pagingStart);
 assert.ok(pagingStart >= 0 && pagingEnd > pagingStart);
@@ -163,6 +232,9 @@ for (const href of [undefined, 'space.php?uid=123', 'space.php?uid=invalid']) {
   assert.ok(contracts.parseThreadWebPayload(JSON.stringify(raw)), 'ArkWeb double-wrapped JSON remains supported');
 }
 const invalidIdentity = JSON.parse(extractPage('space.php?uid=123'));
+const quotePayload = JSON.parse(extractPage('space.php?uid=123'));
+quotePayload.posts[0].content = [plainQuote, replyQuote, replyTarget];
+assert.ok(contracts.parseThreadWebPayload(JSON.stringify(quotePayload)), 'quote output satisfies the reader contract');
 invalidIdentity.posts[0].authorUserId = 'not-an-id';
 assert.equal(contracts.parseThreadWebPayload(JSON.stringify(invalidIdentity)), null,
   'do not relax validation of a supplied identity');

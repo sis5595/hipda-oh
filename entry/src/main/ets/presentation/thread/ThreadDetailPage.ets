@@ -1682,14 +1682,25 @@ export struct ThreadDetailPage {
           }
           .width('100%')
         }
-        Text(content.value)
-          .fontSize(15)
-          .fontColor($r('app.color.text_detail'))
-          .lineHeight(this.getPostLineHeight(23))
-          .maxLines(3)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
-          .width('100%')
+        if (this.hasQuoteHeader(content)) {
+          Text(content.value)
+            .fontSize(15)
+            .fontColor($r('app.color.text_detail'))
+            .lineHeight(this.getPostLineHeight(23))
+            .maxLines(3)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+            .width('100%')
+        } else {
+          // NG renders unattributed quote blocks as complete body text, not
+          // reply previews. Authors use them to lay out their own post.
+          Text(content.value)
+            .fontSize(15)
+            .fontColor($r('app.color.text_body'))
+            .lineHeight(this.getPostLineHeight(23))
+            .textSelectable(TextSelectableMode.SELECTABLE_UNFOCUSABLE)
+            .width('100%')
+        }
       }
       .width('100%')
       .padding({ left: 8, right: 8, top: 8, bottom: 8 })
@@ -5230,20 +5241,42 @@ export struct ThreadDetailPage {
       '      author: replyMatch ? (replyMatch[2] || "").trim() : ""',
       '    };',
       '  };',
+      '  // Preserve semantic line breaks without relying on innerText on a',
+      '  // detached clone (or on the hidden Web view layout).',
+      '  const getPlainQuoteText = (root) => {',
+      '    let value = "";',
+      '    const lineBreak = () => { if (value && !/\\n[ \\t\\r\\f]*$/.test(value)) value += "\\n"; };',
+      '    const walk = (node, preserveWhitespace) => {',
+      '      if (node.nodeType === 3) { const raw = node.nodeValue || ""; value += preserveWhitespace ? raw : raw.replace(/[ \\t\\r\\n\\f]+/g, " "); return; }',
+      '      if (node.nodeType !== 1) return;',
+      '      const tag = node.tagName.toLowerCase();',
+      '      if (tag === "script" || tag === "style") return;',
+      '      if (tag === "br") { value += "\\n"; return; }',
+      '      const isBlock = node !== root && /^(?:p|div|li|blockquote|pre|tr|h[1-6])$/.test(tag);',
+      '      if (isBlock) lineBreak();',
+      '      Array.from(node.childNodes).forEach((child) => walk(child, preserveWhitespace || tag === "pre"));',
+      '      if (isBlock) lineBreak();',
+      '    };',
+      '    walk(root, false);',
+      '    return value.trim();',
+      '  };',
       '  const getQuoteData = (node) => {',
       '    const target = getQuoteTarget(node);',
       '    const copy = node.cloneNode(true);',
       '    const attribution = copy.querySelector("font[size=\\\"2\\\"], .quoteauthor, .quote_author");',
       '    const attributionText = toText(attribution);',
       '    const attributionMatch = /^(.*?)\\s*\u53d1\u8868\\s*\u4e8e\\s*(.*)$/.exec(attributionText);',
-      '    if (attribution) attribution.remove();',
+      '    // A size-2 font is also ordinary formatting. Remove only an actual',
+      '    // forum attribution, never the author\'s own body text.',
+      '    if (attributionMatch) attribution.remove();',
+      '    const isReply = !!attributionMatch || !!target.postId || target.floor > 0;',
       '    Array.from(copy.querySelectorAll("[style*=\\\"display\\\"][style*=\\\"none\\\"]")).forEach((hidden) => hidden.remove());',
       '    Array.from(copy.querySelectorAll("a[href]")).forEach((link) => {',
       '      const href = link.getAttribute("href") || "";',
-      '      if (isQuoteSourceLink(href)) link.remove();',
+      '      if (isReply && isQuoteSourceLink(href)) link.remove();',
       '    });',
-      '    let value = toText(copy);',
-      '    value = value.replace(/^\\s*\u56de\u590d\\s+/, "").trim();',
+      '    let value = isReply ? toText(copy) : getPlainQuoteText(copy);',
+      '    if (isReply) value = value.replace(/^\\s*\u56de\u590d\\s+/, "").trim();',
       '    return {',
       '      value: value,',
       '      author: attributionMatch ? attributionMatch[1].trim() : target.author,',
