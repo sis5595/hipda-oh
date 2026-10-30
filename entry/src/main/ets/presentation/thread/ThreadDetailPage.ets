@@ -1,4 +1,5 @@
 import { ForumSmileyButton } from '../composer/ForumSmileyButton';
+import { getFourD4ySheetHeight, getFourD4ySheetWidth } from '../layout/FourD4yAdaptiveLayout';
 import { common, Want } from '@kit.AbilityKit';
 import { bindFourD4yCollectionCache } from '../common/FourD4yCollectionCacheBinding';
 import { FourD4yRowVersions } from '../common/FourD4yRowVersions';
@@ -94,6 +95,8 @@ interface FourD4yPostImageSize {
 
 @Component
 export struct ThreadDetailPage {
+  @StorageProp('hipdaoh_viewport_width') viewportWidth: number = 0;
+  @StorageProp('hipdaoh_viewport_height') viewportHeight: number = 0;
   @Consume('pathStack') pathStack: NavPathStack;
   @Consume('webRoute') webRoute: WebRouteState;
   @Consume('imageViewerRoute') imageViewerRoute: ImageViewerRouteState;
@@ -813,7 +816,9 @@ export struct ThreadDetailPage {
           // A compact stable height matches NG's sheet baseline. FIT_CONTENT
           // becomes too short for one-line titles while a fixed 460vp leaves
           // a conspicuous blank area. 290vp still accommodates two lines.
-          height: 290,
+          height: getFourD4ySheetHeight(290, this.viewportHeight),
+          width: getFourD4ySheetWidth(this.viewportWidth),
+          preferType: SheetType.BOTTOM,
           dragBar: false,
           showClose: false,
           onDisappear: () => {
@@ -1790,7 +1795,8 @@ export struct ThreadDetailPage {
 
   @Builder
   private buildPagePicker() {
-    Column({ space: 10 }) {
+    Scroll() {
+      Column({ space: 10 }) {
       Text(this.resolvedTitle || this.route.threadTitle || '主题详情')
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
@@ -1826,7 +1832,7 @@ export struct ThreadDetailPage {
           .fontSize(30)
           .fontColor(!this.isLoading ? $r('app.color.brand') : $r('app.color.text_muted'))
           .textAlign(TextAlign.Center)
-          .width(56)
+          .width('20%')
           .height(56)
           .backgroundColor($r('app.color.page_jump_control'))
           .borderRadius(28)
@@ -1840,12 +1846,11 @@ export struct ThreadDetailPage {
           .fontSize(34)
           .fontColor(this.selectedPage > 1 ? $r('app.color.brand') : $r('app.color.text_muted'))
           .textAlign(TextAlign.Center)
-          .width(56)
+          .width('20%')
           .height(56)
           .backgroundColor($r('app.color.page_jump_control'))
           .borderRadius(28)
           .enabled(this.selectedPage > 1)
-          .margin({ left: 24 })
           .onClick(() => {
             this.jumpToPage(this.selectedPage - 1, false);
           })
@@ -1854,12 +1859,11 @@ export struct ThreadDetailPage {
           .fontSize(34)
           .fontColor(this.selectedPage < this.lastPage ? $r('app.color.brand') : $r('app.color.text_muted'))
           .textAlign(TextAlign.Center)
-          .width(56)
+          .width('20%')
           .height(56)
           .backgroundColor($r('app.color.page_jump_control'))
           .borderRadius(28)
           .enabled(this.selectedPage < this.lastPage)
-          .margin({ right: 24 })
           .onClick(() => {
             this.jumpToPage(this.selectedPage + 1, false);
           })
@@ -1867,7 +1871,7 @@ export struct ThreadDetailPage {
           .fontSize(30)
           .fontColor(!this.isLoading ? $r('app.color.brand') : $r('app.color.text_muted'))
           .textAlign(TextAlign.Center)
-          .width(56)
+          .width('20%')
           .height(56)
           .backgroundColor($r('app.color.page_jump_control'))
           .borderRadius(28)
@@ -1881,6 +1885,10 @@ export struct ThreadDetailPage {
     }
     .width('100%')
     .padding({ left: 20, right: 20, top: 14, bottom: 16 })
+    }
+    .width('100%')
+    .height('100%')
+    .align(Alignment.Top)
   }
 
   @Builder

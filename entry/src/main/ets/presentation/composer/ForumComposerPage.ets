@@ -90,6 +90,7 @@ export struct ForumComposerPage {
   /** A reply edit page can expose an empty subject input; only a real title is editable. */
   @State hasEditableSubject: boolean = false;
   @State messageDraft: string = '';
+  @State compactReplyLayout: boolean = false;
   @State smileySelectionStart: number = -1;
   @State smileySelectionEnd: number = -1;
   private readonly smileyTextController: TextAreaController = new TextAreaController();
@@ -199,6 +200,12 @@ export struct ForumComposerPage {
     }
   };
 
+  private readonly onEditAvoidArea = (options: window.AvoidAreaOptions): void => {
+    if (options.type === window.AvoidAreaType.TYPE_KEYBOARD) {
+      this.onEditKeyboardHeight(options.area.bottomRect.height);
+    }
+  };
+
   private async attachEditKeyboard(): Promise<void> {
     if (this.route.mode !== ForumComposerMode.Edit || this.editWindow) {
       return;
@@ -211,6 +218,7 @@ export struct ForumComposerPage {
       }
       this.editWindow = currentWindow;
       currentWindow.on('keyboardHeightChange', this.onEditKeyboardHeight);
+      currentWindow.on('avoidAreaChange', this.onEditAvoidArea);
       // NavDestination kept its uncompressed measured height on the device.
       // Use the actual keyboard inset for edit only, without double avoidance.
       this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.NONE);
@@ -242,6 +250,7 @@ export struct ForumComposerPage {
     if (this.editWindow) {
       try {
         this.editWindow.off('keyboardHeightChange', this.onEditKeyboardHeight);
+        this.editWindow.off('avoidAreaChange', this.onEditAvoidArea);
       } catch (_error) {
         // The window may already have been destroyed.
       }
@@ -375,6 +384,9 @@ export struct ForumComposerPage {
       this.uploadedImageAttachmentIds = [];
       this.uploadedImageDrafts = [];
       this.isComposerRouteReady = true;
+      // onShown can precede route initialization during navigation/resize.
+      // The async attach guard prevents duplicate subscriptions.
+      void this.attachEditKeyboard();
       this.prepareFormWhenReady();
     })
   }
@@ -523,7 +535,7 @@ export struct ForumComposerPage {
         .width('100%')
       }
       .align(Alignment.Top)
-      .constraintSize({ maxHeight: 200 })
+      .constraintSize({ maxHeight: '30%' })
       .width('100%')
       .scrollBar(BarState.Auto)
 
@@ -618,19 +630,24 @@ export struct ForumComposerPage {
    */
   @Builder
   private buildAdvancedReplyEditor() {
-    Column({ space: 10 }) {
-      Column({ space: 8 }) {
-        this.buildFormState();
-        if (this.route.mode === ForumComposerMode.Quote) {
-          this.buildQuotePreview();
+    Column({ space: this.compactReplyLayout ? 4 : 10 }) {
+      Scroll() {
+        Column({ space: 8 }) {
+          this.buildFormState();
+          if (this.route.mode === ForumComposerMode.Quote) {
+            this.buildQuotePreview();
+          }
+          if (this.supportsImageUpload() && this.isImageUploadAvailable) {
+            this.buildImageUploadControls();
+          }
         }
-        if (this.supportsImageUpload() && this.isImageUploadAvailable) {
-          this.buildImageUploadControls();
-        }
+        .alignItems(HorizontalAlign.Start)
+        .width('100%')
+        .padding({ left: 16, right: 16, top: this.compactReplyLayout ? 2 : 10 })
       }
-      .alignItems(HorizontalAlign.Start)
+      .align(Alignment.Top)
+      .constraintSize({ maxHeight: '30%' })
       .width('100%')
-      .padding({ left: 16, right: 16, top: 10 })
 
       TextArea({ placeholder: '写下回复', text: this.messageDraft, controller: this.smileyTextController })
           .onTextSelectionChange((start: number, end: number) => {
@@ -648,7 +665,7 @@ export struct ForumComposerPage {
         .backgroundColor($r('app.color.surface_subtle'))
         .border({ width: 1, color: $r('app.color.border_strong'), radius: 8 })
         .width('100%')
-        .padding(12)
+        .padding(this.compactReplyLayout ? 4 : 12)
         .margin({ left: 16, right: 16 })
         .onAppear(() => {
           this.requestComposerInputFocus();
@@ -684,13 +701,20 @@ export struct ForumComposerPage {
       }
       .alignItems(VerticalAlign.Center)
       .width('100%')
-      .padding({ left: 16, right: 10, top: 6, bottom: 10 })
+      .padding({ left: 16, right: 10, top: this.compactReplyLayout ? 0 : 6,
+        bottom: this.compactReplyLayout ? 0 : 10 })
       .border({ width: { top: 1 }, color: $r('app.color.border_strong') })
     }
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.surface'))
     .align(Alignment.Top)
+    .onAreaChange((_oldArea: Area, newArea: Area) => {
+      // Measure the editor after keyboard avoidance, not the physical display.
+      // Change spacing only: keep the same input, draft, focus and selection.
+      const availableHeight = Number(newArea.height);
+      this.compactReplyLayout = Number.isFinite(availableHeight) && availableHeight > 0 && availableHeight < 280;
+    })
   }
 
   private requestComposerInputFocus(): void {

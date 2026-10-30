@@ -13,7 +13,11 @@ const modes = [];
 const ui = { getHostContext: () => ({}), px2vp: n => n / 2,
   setKeyboardAvoidMode: mode => modes.push(mode) };
 let listener;
-const win = { on: (event, callback) => { listener = callback; },
+let avoidListener;
+const win = { on: (event, callback) => {
+    if (event === 'keyboardHeightChange') listener = callback;
+    if (event === 'avoidAreaChange') avoidListener = callback;
+  },
   getWindowAvoidArea: type => ({ bottomRect: { height: type === 'nav' ? 40 : 640 } }) };
 vm.runInNewContext(ts.transpileModule('class Editor {' + source.slice(begin, end) +
   '} exports.Editor = Editor;', { compilerOptions: { target: ts.ScriptTarget.ES2020,
@@ -47,8 +51,13 @@ function editor(mode = 'edit') {
   assert.equal(current.editKeyboardInset, 400, 'keyboard size changes resize the editor');
   listener(NaN);
   assert.equal(current.editKeyboardInset, 400);
+  avoidListener({ type: 'keyboard', area: { bottomRect: { height: 740 } } });
+  assert.equal(current.editKeyboardInset, 350, 'rotation updates the actual keyboard avoid area');
+  avoidListener({ type: 'nav', area: { bottomRect: { height: 40 } } });
+  assert.equal(current.editKeyboardInset, 350, 'unrelated avoid areas do not erase the keyboard inset');
   current.isComposerRouteReady = false;
   listener(0);
-  assert.equal(current.editKeyboardInset, 400, 'late keyboard events cannot update disposed state');
+  avoidListener({ type: 'keyboard', area: { bottomRect: { height: 0 } } });
+  assert.equal(current.editKeyboardInset, 350, 'late keyboard events cannot update disposed state');
   console.log('Edit keyboard inset and late-window/event guards passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

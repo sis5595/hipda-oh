@@ -119,7 +119,16 @@ struct Index {
       .width('100%')
       .height('100%')
       .hideTitleBar(true)
+      // NG-style list -> detail -> back on both phone and tablet. Auto would
+      // turn the existing home page into a narrow sidebar on large windows.
+      .mode(NavigationMode.Stack)
       .navDestination(this.routeMap)
+      .onAreaChange((_oldArea: Area, area: Area) => {
+        // Actual available content area, not a physical display/device guess.
+        // This does not recreate the stack, reload a page or touch any drafts.
+        AppStorage.setOrCreate<number>('hipdaoh_viewport_width', Number(area.width));
+        AppStorage.setOrCreate<number>('hipdaoh_viewport_height', Number(area.height));
+      })
     }
   }
 

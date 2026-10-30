@@ -3,6 +3,7 @@ import { FourD4yBlacklistMutationResultPayload, FourD4yBlacklistMutationStartPay
 import { FourD4yBlacklistState } from '../main/ets/domain/blacklist/FourD4yBlacklistState';
 import { isConfirmedFourD4yVoteResult, isExpectedFourD4yVotePreflightPayload, isExpectedFourD4yVoteSubmissionStartPayload, isExpectedFourD4yVoteVerificationPayload, isReadyFourD4yVoteForm, parseFourD4yVotePreflightPayload, parseFourD4yVoteSubmissionStartPayload, parseFourD4yVoteVerificationPayload } from '../main/ets/domain/poll/FourD4yPollContracts';
 import { describe, expect, it } from '@ohos/hypium';
+import { getFourD4ySheetHeight, getFourD4ySheetWidth } from '../main/ets/presentation/layout/FourD4yAdaptiveLayout';
 import { estimateLastPageFromReplyCount, ForumLinkKind, ForumWebPayload, FourD4yPageAccessState, FourD4yReaderOutcome, getForumReaderOutcome, getThreadReaderOutcome, is4D4yInlineImageAttachment, is4D4yLegacyPostId, is4D4yPinnedMobileTitleStyle, isAllowedExtractedContentUrl, isCurrentFourD4yWebRequest, isExpectedForumNewThreadPreflightPayload, isExpectedForumWebPayload, isExpectedReplyPreflightPayload, isExpectedReplySubmissionPayload, isExpectedThreadWebPayload, isReadyForumNewThreadForm, parseForumNewThreadPreflightPayload, parseForumWebPayload, parseReplyPreflightPayload, parseReplySubmissionPayload, parseThreadWebPayload, resolveForumLink, select4D4yPostAuthor } from '../main/ets/domain/reader/FourD4yReaderContracts';
 import { findFourD4yReaderScenario, FOUR_D4Y_READER_SCENARIOS, getPendingFourD4yReaderScenarios } from '../main/ets/domain/reader/FourD4yReaderScenarios';
 import { areFourD4yReaderFixturesValueFree, findFourD4yReaderFixture,
@@ -1930,6 +1931,14 @@ export default function fourD4yContractTest() {
       expect(parseFourD4yVotePreflightPayload(
         '{"threadId":"3462417","formSequence":7,"accessState":"available","hasChallenge":false,"formFound":true,"formMethod":"post","actionPath":"/forum/misc.php?action=votepoll&pollsubmit=yes","hasFormhashField":true,"hasPollSubmitAction":true,"maxSelections":5,"isMultipleChoice":true,"optionIds":["101","101"],"errorMessage":""}'
       ) === null).assertEqual(true);
+    });
+
+    it('keeps bottom sheets compact and inside the current window', 0, () => {
+      expect(getFourD4ySheetWidth(360)).assertEqual(360);
+      expect(getFourD4ySheetWidth(1440)).assertEqual(560);
+      expect(getFourD4ySheetHeight(620, 500)).assertEqual(452);
+      expect(getFourD4ySheetHeight(320, 240)).assertEqual(192);
+      expect(getFourD4ySheetHeight(320, 0)).assertEqual(320);
     });
 
     it('accepts only a correlated server-rendered poll result as success', 0, () => {

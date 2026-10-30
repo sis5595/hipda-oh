@@ -1,8 +1,11 @@
 import { FourD4ySmiley, FourD4ySmileyInsertion, getFourD4ySmilies, insertFourD4ySmiley }
   from '../../domain/composer/FourD4ySmilies';
+import { getFourD4ySheetHeight, getFourD4ySheetWidth } from '../layout/FourD4yAdaptiveLayout';
 
 @Component
 export struct ForumSmileyButton {
+  @StorageProp('hipdaoh_viewport_width') viewportWidth: number = 0;
+  @StorageProp('hipdaoh_viewport_height') viewportHeight: number = 0;
   @Link text: string;
   @Link selectionStart: number;
   @Link selectionEnd: number;
@@ -50,12 +53,14 @@ export struct ForumSmileyButton {
           }.height(48)
         }, (item: FourD4ySmiley) => item.code)
       }.columnsTemplate('1fr 1fr 1fr 1fr 1fr 1fr').rowsGap(4).layoutWeight(1).width('100%')
-      Row({ space: 6 }) {
-        Text('已插入').fontSize(12).fontColor($r('app.color.text_secondary'))
-        ForEach(this.selected, (item: FourD4ySmiley) => {
-          Image(item.imageUrl).width(24).height(24).objectFit(ImageFit.Contain)
-        })
-      }.height(28).width('100%')
+      Scroll() {
+        Row({ space: 6 }) {
+          Text('已插入').fontSize(12).fontColor($r('app.color.text_secondary'))
+          ForEach(this.selected, (item: FourD4ySmiley) => {
+            Image(item.imageUrl).width(24).height(24).objectFit(ImageFit.Contain)
+          })
+        }.height(28)
+      }.scrollable(ScrollDirection.Horizontal).height(28).width('100%')
     }.padding(12).width('100%').height('100%').backgroundColor($r('app.color.surface'))
   }
 
@@ -68,7 +73,9 @@ export struct ForumSmileyButton {
         this.visible = true;
       })
       .bindSheet($$this.visible, this.panel(), {
-        height: 320,
+        height: getFourD4ySheetHeight(320, this.viewportHeight),
+        width: getFourD4ySheetWidth(this.viewportWidth),
+        preferType: SheetType.BOTTOM,
         showClose: false,
         onDisappear: () => {
           if (!this.alive) { return; }

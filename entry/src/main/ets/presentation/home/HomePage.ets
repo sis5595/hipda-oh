@@ -1,4 +1,5 @@
 import { ForumSummary, ThreadSummary } from '../../domain/model/ForumModels';
+import { getFourD4ySheetHeight, getFourD4ySheetWidth } from '../layout/FourD4yAdaptiveLayout';
 import { FourD4yRowVersions } from '../common/FourD4yRowVersions';
 import { buildFourD4yAvatarUrl } from '../../domain/profile/FourD4yAvatar';
 import { buildFourD4yEmptyForumScript, buildFourD4yForumFilterQuery, buildFourD4yForumNavigationScript, retainSelectedFourD4yForumType } from '../../domain/reader/FourD4yForumFilter';
@@ -41,6 +42,8 @@ enum HomeAppearanceSheetMode {
 
 @Component
 export struct HomePage {
+  @StorageProp('hipdaoh_viewport_width') viewportWidth: number = 0;
+  @StorageProp('hipdaoh_viewport_height') viewportHeight: number = 0;
   @Consume('pathStack') pathStack: NavPathStack;
   @StorageLink('fourD4yForegroundGeneration') @Watch('onForegroundGenerationChanged')
   appForegroundGeneration: number = 0;
@@ -263,7 +266,10 @@ export struct HomePage {
     .width('100%')
     .height('100%')
     .bindSheet(this.isAppearanceSheetVisible, this.buildAppearanceSheet(), {
-      height: this.appearanceSheetMode === HomeAppearanceSheetMode.Typography ? 460 : 300,
+      height: getFourD4ySheetHeight(
+        this.appearanceSheetMode === HomeAppearanceSheetMode.Typography ? 460 : 300, this.viewportHeight),
+      width: getFourD4ySheetWidth(this.viewportWidth),
+      preferType: SheetType.BOTTOM,
       dragBar: true,
       showClose: true,
       onDisappear: () => {
@@ -372,6 +378,7 @@ export struct HomePage {
         .width('100%')
         .padding({ bottom: 22 })
       }
+      .align(Alignment.Top)
       .layoutWeight(1)
       .width('100%')
       .scrollBar(BarState.Auto)
@@ -466,22 +473,26 @@ export struct HomePage {
 
   @Builder
   private buildAppearanceSheet() {
-    Column({ space: 14 }) {
-      if (this.appearanceSheetMode === HomeAppearanceSheetMode.Typography) {
-        this.buildTypographySheetContent();
-      } else {
-        this.buildThemeSheetContent();
+    Scroll() {
+      Column({ space: 14 }) {
+        if (this.appearanceSheetMode === HomeAppearanceSheetMode.Typography) {
+          this.buildTypographySheetContent();
+        } else {
+          this.buildThemeSheetContent();
+        }
+        if (this.appearanceStatus.length > 0) {
+          Text(this.appearanceStatus)
+            .fontSize(13)
+            .fontColor($r('app.color.danger_text'))
+            .width('100%');
+        }
       }
-      if (this.appearanceStatus.length > 0) {
-        Text(this.appearanceStatus)
-          .fontSize(13)
-          .fontColor($r('app.color.danger_text'))
-          .width('100%');
-      }
+      .width('100%')
+      .padding({ left: 20, right: 20, top: 8, bottom: 20 })
     }
+    .align(Alignment.Top)
     .width('100%')
     .height('100%')
-    .padding({ left: 20, right: 20, top: 8, bottom: 20 })
     .backgroundColor($r('app.color.surface'))
   }
 
@@ -1196,7 +1207,9 @@ export struct HomePage {
       // This makes “板块” the single all-forums entry instead of duplicating
       // it in the board header.
       .bindSheet(this.isForumPickerVisible, this.buildForumPicker(), {
-        height: 620,
+        height: getFourD4ySheetHeight(620, this.viewportHeight),
+        width: getFourD4ySheetWidth(this.viewportWidth),
+        preferType: SheetType.BOTTOM,
         dragBar: true,
         showClose: true,
         onDisappear: () => {
