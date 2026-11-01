@@ -10,7 +10,9 @@ const moduleConfig = read('module.json5');
 assert.match(moduleConfig, /"deviceTypes"\s*:\s*\[\s*"phone",\s*"tablet"\s*\]/);
 assert.match(moduleConfig, /"orientation"\s*:\s*"auto_rotation_restricted"/);
 const index = read('ets/pages/Index.ets');
-assert.match(index, /\.mode\(NavigationMode\.Stack\)/);
+assert.match(index, /NavigationMode\.Split : NavigationMode\.Stack/);
+assert.match(index, /\.navBarWidth\('40%'\)/);
+assert.match(index, /\.splitPlaceholder\(this\.splitEmptyContent\)/);
 assert.equal((index.match(/Navigation\(this\.pathStack\)/g) || []).length, 1,
   'Resizing must not recreate a different navigation tree or its drafts');
 assert.match(index, /onAreaChange/);
@@ -21,6 +23,12 @@ const compiled = ts.transpileModule(source, { compilerOptions: {
 const context = { exports: {} };
 vm.runInNewContext(compiled, context);
 const { getFourD4ySheetWidth: width, getFourD4ySheetHeight: height } = context.exports;
+const { isFourD4yWideLayout: wide, isFourD4yFullWidthRoute: fullWidth } = context.exports;
+for (const w of [0, NaN, Infinity, 360, 599]) assert.equal(wide(w), false);
+for (const w of [600, 707.2, 720, 840, 960, 1440]) assert.equal(wide(w), true);
+for (const name of ['ForumComposer', 'Login', 'Account', 'ImageViewer']) assert.equal(fullWidth(name), true);
+for (const name of ['', 'ThreadDetail', 'UserProfile', 'Favorites', 'Search']) assert.equal(fullWidth(name), false);
+assert.match(index, /!this\.quickReplyVisible/);
 assert.equal(width(360), 360);
 assert.equal(width(599), 599);
 assert.equal(width(600), 420);
@@ -50,6 +58,8 @@ for (const file of ['home/HomePage.ets', 'thread/ThreadDetailPage.ets',
 }
 const composer = read('ets/presentation/composer/ForumComposerPage.ets');
 const home = read('ets/presentation/home/HomePage.ets');
+assert.match(read('ets/presentation/thread/ThreadDetailPage.ets'), /mode: SheetMode\.EMBEDDED/,
+  'Thread page picker must stay in its destination pane, not overlap the left list');
 assert.match(home.slice(home.indexOf('private buildMainDrawer()'),
   home.indexOf('private buildDrawerIdentityHeader()')), /\.align\(Alignment\.Top\)/,
   'A tall tablet must not vertically center the drawer entries below a large blank area');
@@ -63,4 +73,4 @@ assert.match(advanced, /availableHeight < 280/);
 assert.match(advanced, /padding\(this\.compactReplyLayout \? 4 : 12\)/);
 assert.equal((advanced.match(/TextArea\(/g) || []).length, 1,
   'Short-window spacing must not replace the focused input');
-console.log('Adaptive single-stack navigation, device declaration and bounded sheet/editor layout passed.');
+console.log('Adaptive dual/single-pane navigation, device declaration and bounded sheet/editor layout passed.');

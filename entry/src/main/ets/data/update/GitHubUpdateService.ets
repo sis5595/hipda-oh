@@ -17,10 +17,10 @@ export function isOfficialUpdateUrl(value: string): boolean {
       return parsed.pathname === '/repos/sis5595/hipda-oh/releases';
     }
     if (parsed.hostname === 'raw.githubusercontent.com') {
-      return /^\/sis5595\/hipda-oh\/v\d+\.\d+\.\d+(?:\.\d+|-beta\.\d+)?\/AppScope\/app\.json5$/.test(parsed.pathname);
+      return /^\/sis5595\/hipda-oh\/v\d+\.\d+\.\d+(?:\.\d+|-beta\.\d+(?:\.\d+)?)?\/AppScope\/app\.json5$/.test(parsed.pathname);
     }
     if (parsed.hostname === 'github.com') {
-      return /^\/sis5595\/hipda-oh\/releases\/download\/v\d+\.\d+\.\d+(?:\.\d+|-beta\.\d+)?\/[A-Za-z0-9._-]+$/.test(parsed.pathname);
+      return /^\/sis5595\/hipda-oh\/releases\/download\/v\d+\.\d+\.\d+(?:\.\d+|-beta\.\d+(?:\.\d+)?)?\/[A-Za-z0-9._-]+$/.test(parsed.pathname);
     }
     return parsed.hostname === 'release-assets.githubusercontent.com' ||
       parsed.hostname === 'objects.githubusercontent.com';

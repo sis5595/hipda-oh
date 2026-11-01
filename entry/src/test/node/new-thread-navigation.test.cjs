@@ -17,6 +17,7 @@ const code = extract(route, 'export function createForumComposerThreadPublishedR
   'export function createForumComposerReplyPublishedResult(') +
   '\nclass Editor {' + extract(composer, '  private async readSubmissionResult()', '  private hasCategoryOption(') +
   '} class Home {' + extract(home, '  private onNewThreadComposerReturned(', '  private onConfirmedThreadDeletion(') +
+  extract(home, '  private pushHomeRoute(', '  private refreshAfterAccountManagement(') +
   '} exports.Editor = Editor; exports.Home = Home;';
 vm.runInNewContext(ts.transpileModule(code, { compilerOptions: {
   target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS

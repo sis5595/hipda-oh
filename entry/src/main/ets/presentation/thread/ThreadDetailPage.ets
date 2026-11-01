@@ -95,8 +95,8 @@ interface FourD4yPostImageSize {
 
 @Component
 export struct ThreadDetailPage {
-  @StorageProp('hipdaoh_viewport_width') viewportWidth: number = 0;
-  @StorageProp('hipdaoh_viewport_height') viewportHeight: number = 0;
+  @State viewportWidth: number = 0;
+  @State viewportHeight: number = 0;
   @Consume('pathStack') pathStack: NavPathStack;
   @Consume('webRoute') webRoute: WebRouteState;
   @Consume('imageViewerRoute') imageViewerRoute: ImageViewerRouteState;
@@ -139,7 +139,7 @@ export struct ThreadDetailPage {
   @State resolvedTitle: string = '';
   @State threadPageUrl: string = 'https://www.4d4y.com/forum/';
   @State needsWebVerification: boolean = false;
-  @State isReplyComposerVisible: boolean = false;
+  @StorageLink('hipdaoh_quick_reply_visible') isReplyComposerVisible: boolean = false;
   @State replyDraft: string = '';
   @State smileySelectionStart: number = -1;
   @State smileySelectionEnd: number = -1;
@@ -308,6 +308,7 @@ export struct ThreadDetailPage {
 
   aboutToDisappear(): void {
     this.isThreadPageAlive = false;
+    this.isReplyComposerVisible = false;
     this.cancelPostLayoutAnchor();
     this.webLoadSequence += 1;
     this.replyPreflightSequence += 1;
@@ -714,6 +715,10 @@ export struct ThreadDetailPage {
             this.returnFromThreadSwipe(event);
           })
       )
+      .onAreaChange((_oldArea: Area, area: Area) => {
+        this.viewportWidth = Number(area.width);
+        this.viewportHeight = Number(area.height);
+      })
     }
     .title(this.resolvedTitle || this.route.threadTitle || '主题详情')
     .menus(this.buildThreadTitleActions)
@@ -819,6 +824,7 @@ export struct ThreadDetailPage {
           height: getFourD4ySheetHeight(290, this.viewportHeight),
           width: getFourD4ySheetWidth(this.viewportWidth),
           preferType: SheetType.BOTTOM,
+          mode: SheetMode.EMBEDDED,
           dragBar: false,
           showClose: false,
           onDisappear: () => {

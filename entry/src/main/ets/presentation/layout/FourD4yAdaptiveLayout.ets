@@ -1,4 +1,14 @@
 /** Window-local layout only. Never branch the navigation tree on a device type. */
+export function isFourD4yWideLayout(width: number): boolean {
+  // At 40/60 this leaves at least 240vp for the list and 360vp for reading.
+  // A tablet's narrow portrait/split window must still be usable as one pane.
+  return Number.isFinite(width) && width >= 600;
+}
+
+export function isFourD4yFullWidthRoute(name: string): boolean {
+  return name === 'ForumComposer' || name === 'ImageViewer' || name === 'Login' || name === 'Account';
+}
+
 export function getFourD4ySheetWidth(viewportWidth: number): number {
   if (!Number.isFinite(viewportWidth) || viewportWidth <= 0) {
     return 360;

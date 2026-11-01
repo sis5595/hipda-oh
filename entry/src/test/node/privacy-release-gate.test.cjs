@@ -55,7 +55,9 @@ function gate() {
   storedConsent = true; const returning = gate(); await returning.loadPrivacyConsent();
   assert.equal(restored, 2); assert.equal(accepted, true);
   // UI must not instantiate Home/Web before the consent gate has resolved.
-  assert.match(source, /if \(!this\.privacyReady\)[\s\S]*else if \(!this\.privacyAccepted\)[\s\S]*else \{\s*Navigation/);
+  assert.match(source, /if \(!this\.privacyReady\)[\s\S]*else if \(!this\.privacyAccepted\)[\s\S]*else \{\s*Stack\(\{ alignContent: Alignment\.TopEnd \}\) \{\s*Navigation\(this\.pathStack\) \{\s*HomePage\(\)/);
+  assert.equal((source.match(/HomePage\(\)/g) || []).length, 1,
+    'Home must only be instantiated once, inside the accepted-consent branch');
   assert.match(source, /void this\.rejectPrivacyPolicy\(\)/);
   const policySource = fs.readFileSync(path.join(project, 'entry/src/main/ets/domain/privacy/FourD4yPrivacyPolicy.ets'), 'utf8');
   const policy = {};

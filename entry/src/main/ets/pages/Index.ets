@@ -1,5 +1,8 @@
 import { HomePage } from '../presentation/home/HomePage';
 import { common } from '@kit.AbilityKit';
+import { ComponentContent } from '@kit.ArkUI';
+import { isFourD4yWideLayout, isFourD4yFullWidthRoute } from '../presentation/layout/FourD4yAdaptiveLayout';
+import { ThreadRouteParams } from '../presentation/thread/ThreadRouteState';
 import { ForumComposerPage } from '../presentation/composer/ForumComposerPage';
 import { FavoritesPage } from '../presentation/favorite/FavoritesPage';
 import { AttentionPage } from '../presentation/attention/AttentionPage';
@@ -33,6 +36,17 @@ import { FourD4yPrivacyConsentStore } from '../data/local/FourD4yPrivacyConsentS
 import { FOUR_D4Y_PRIVACY_CONTACT, FOUR_D4Y_PRIVACY_POLICY_UPDATED_AT,
   FOUR_D4Y_PRIVACY_POLICY_SECTIONS, FourD4yPrivacyPolicySection } from '../domain/privacy/FourD4yPrivacyPolicy';
 
+@Builder
+function buildFourD4ySplitEmpty() {
+  Column({ space: 12 }) {
+    Text('HiPDA·OH').fontSize(22).fontColor($r('app.color.brand'))
+    Text('从左侧选择主题').fontSize(16).fontColor($r('app.color.text_secondary'))
+  }
+  .width('100%').height('100%')
+  .justifyContent(FlexAlign.Center)
+  .backgroundColor($r('app.color.canvas'))
+}
+
 @Entry
 @Component
 struct Index {
@@ -55,15 +69,51 @@ struct Index {
   @State isRejectingPrivacyPolicy: boolean = false;
   @State privacyErrorMessage: string = '';
   @State isPolicyDetailVisible: boolean = false;
+  @State navigationWidth: number = 0;
+  @State activeRouteName: string = '';
+  @StorageLink('hipdaoh_quick_reply_visible') quickReplyVisible: boolean = false;
+  @StorageLink('hipdaoh_main_drawer_open') mainDrawerOpen: boolean = false;
+  private readonly splitEmptyContent: ComponentContent<Object> = new ComponentContent(
+    this.getUIContext(), wrapBuilder(buildFourD4ySplitEmpty));
   private isIndexAlive: boolean = false;
 
   aboutToAppear(): void {
     this.isIndexAlive = true;
+    this.pathStack.setInterception({
+      willShow: (_from: NavDestinationContext | string, to: NavDestinationContext | string) => {
+        if (!this.isIndexAlive) {
+          return;
+        }
+        this.activeRouteName = typeof to === 'string' ? '' : to.pathInfo.name;
+        if (typeof to !== 'string' && to.pathInfo.name === 'ThreadDetail') {
+          const route = to.pathInfo.param as ThreadRouteParams;
+          AppStorage.setOrCreate<string>('hipdaoh_selected_thread_id', route.threadId);
+        } else if (typeof to === 'string') {
+          AppStorage.setOrCreate<string>('hipdaoh_selected_thread_id', '');
+        }
+      }
+    });
     void this.loadPrivacyConsent();
   }
 
   aboutToDisappear(): void {
     this.isIndexAlive = false;
+    this.splitEmptyContent.dispose();
+  }
+
+  onBackPress(): boolean {
+    if (isFourD4yWideLayout(this.navigationWidth) && this.mainDrawerOpen) {
+      this.mainDrawerOpen = false;
+      return true;
+    }
+    // Split's platform default exits when only one destination remains. Close
+    // that right pane instead. Full-width editors retain destination Back logic.
+    if (isFourD4yWideLayout(this.navigationWidth) && !this.quickReplyVisible &&
+      !isFourD4yFullWidthRoute(this.activeRouteName) && this.pathStack.size() > 0) {
+      this.pathStack.pop();
+      return true;
+    }
+    return false;
   }
 
   @Builder
@@ -113,22 +163,41 @@ struct Index {
     } else if (!this.privacyAccepted) {
       this.buildPrivacyConsent();
     } else {
-      Navigation(this.pathStack) {
-        HomePage();
-      }
-      .width('100%')
-      .height('100%')
-      .hideTitleBar(true)
-      // NG-style list -> detail -> back on both phone and tablet. Auto would
-      // turn the existing home page into a narrow sidebar on large windows.
-      .mode(NavigationMode.Stack)
-      .navDestination(this.routeMap)
-      .onAreaChange((_oldArea: Area, area: Area) => {
-        // Actual available content area, not a physical display/device guess.
-        // This does not recreate the stack, reload a page or touch any drafts.
-        AppStorage.setOrCreate<number>('hipdaoh_viewport_width', Number(area.width));
-        AppStorage.setOrCreate<number>('hipdaoh_viewport_height', Number(area.height));
-      })
+      Stack({ alignContent: Alignment.TopEnd }) {
+        Navigation(this.pathStack) {
+          HomePage();
+        }
+        .width('100%')
+        .height('100%')
+        .hideTitleBar(true)
+        // One persistent navigation tree: resizing never replaces a draft or stack.
+        .mode(isFourD4yWideLayout(this.navigationWidth) &&
+          !isFourD4yFullWidthRoute(this.activeRouteName) && !this.quickReplyVisible ?
+          NavigationMode.Split : NavigationMode.Stack)
+        .navBarWidth('40%')
+        .navBarWidthRange([240, '45%'])
+        .minContentWidth(360)
+        .enableDragBar(false)
+        .splitPlaceholder(this.splitEmptyContent)
+        .navDestination(this.routeMap)
+        .onAreaChange((_oldArea: Area, area: Area) => {
+          // Actual available content area, not a physical display/device guess.
+          // This does not recreate the stack, reload a page or touch any drafts.
+          AppStorage.setOrCreate<number>('hipdaoh_viewport_width', Number(area.width));
+          AppStorage.setOrCreate<number>('hipdaoh_viewport_height', Number(area.height));
+          this.navigationWidth = Number(area.width);
+          AppStorage.setOrCreate<boolean>('hipdaoh_wide_layout', isFourD4yWideLayout(this.navigationWidth));
+        })
+        if (isFourD4yWideLayout(this.navigationWidth) && this.mainDrawerOpen &&
+          !isFourD4yFullWidthRoute(this.activeRouteName) && !this.quickReplyVisible) {
+          // Home's own scrim covers the left pane. Extend dismissal over the
+          // right pane too, without intercepting the actual drawer controls.
+          Column().width('60%').height('100%')
+            .backgroundColor($r('app.color.overlay_scrim'))
+            .onClick(() => { this.mainDrawerOpen = false; })
+            .transition(TransitionEffect.OPACITY.animation({ duration: 180, curve: Curve.EaseOut }))
+        }
+      }.width('100%').height('100%')
     }
   }
 

@@ -29,6 +29,19 @@ const release = { tag_name: tag, draft: false, prerelease: true, body: '修复�
 ] };
 const version = { app: { bundleName: 'com.sis5595.hipdaoh', versionName: '1.0.0-beta.10', versionCode: 1000011 } };
 const candidate = policy.makeUpdateCandidate(release, JSON.stringify(version));
+const maintenanceTag = 'v1.0.0-beta.6.1';
+const maintenanceName = 'hipda-oh-1.0.0-beta.6.1-unsigned.hap';
+const maintenanceBase = policy.UPDATE_RELEASES + '/download/' + maintenanceTag + '/';
+const maintenance = { ...release, tag_name: maintenanceTag, assets: [
+  { ...release.assets[0], name: maintenanceName, browser_download_url: maintenanceBase + maintenanceName },
+  { ...release.assets[1], browser_download_url: maintenanceBase + 'SHA256SUMS.txt' }
+] };
+const maintenanceCandidate = policy.makeUpdateCandidate(maintenance, JSON.stringify({ app: {
+  ...version.app, versionName: '1.0.0-beta.6.1', versionCode: 1000008
+} }));
+assert.equal(policy.selectNewerUpdate([maintenanceCandidate], 1000007).versionCode, 1000008);
+assert.equal(policy.selectNewerUpdate([maintenanceCandidate], 1000008), undefined);
+assert.equal(policy.isUpdateTag('v1.0.0-beta.6.1.2'), false);
 assert.equal(policy.parseUpdateReleases(JSON.stringify([release])).length, 1, 'include prereleases');
 assert.equal(policy.parseUpdateReleases(JSON.stringify([{ ...release, draft: true }])).length, 0);
 assert.equal(policy.parseUpdateReleases(JSON.stringify([{ ...release, assets: [] }])).length, 0, 'source-only beta1');
@@ -118,6 +131,7 @@ const service = load('data/update/GitHubUpdateService.ets', id => {
   return policy;
 });
 for (const address of [policy.UPDATE_API, policy.updateVersionUrl(tag), base + fileName,
+  policy.updateVersionUrl(maintenanceTag), maintenanceBase + maintenanceName,
   'https://release-assets.githubusercontent.com/github-production-release-asset/1/abc?sig=example']) {
   assert.equal(service.isOfficialUpdateUrl(address), true, address);
 }

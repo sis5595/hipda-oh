@@ -42,8 +42,10 @@ enum HomeAppearanceSheetMode {
 
 @Component
 export struct HomePage {
-  @StorageProp('hipdaoh_viewport_width') viewportWidth: number = 0;
-  @StorageProp('hipdaoh_viewport_height') viewportHeight: number = 0;
+  @State viewportWidth: number = 0;
+  @State viewportHeight: number = 0;
+  @StorageProp('hipdaoh_wide_layout') isWideLayout: boolean = false;
+  @StorageProp('hipdaoh_selected_thread_id') selectedThreadId: string = '';
   @Consume('pathStack') pathStack: NavPathStack;
   @StorageLink('fourD4yForegroundGeneration') @Watch('onForegroundGenerationChanged')
   appForegroundGeneration: number = 0;
@@ -74,7 +76,7 @@ export struct HomePage {
   @State canCreateTopicInCurrentForum: boolean = false;
   @State topicPermissionMessage: string = '';
   @State quickForumIds: string[] = [...FOUR_D4Y_QUICK_FORUM_IDS];
-  @State isMainDrawerOpen: boolean = false;
+  @StorageLink('hipdaoh_main_drawer_open') isMainDrawerOpen: boolean = false;
   @State isAllDrawerForumsVisible: boolean = false;
   @State drawerAccountName: string = '';
   @State drawerAccountUserId: string = '';
@@ -172,6 +174,10 @@ export struct HomePage {
     }
     .width('100%')
     .height('100%')
+    .onAreaChange((_oldArea: Area, area: Area) => {
+      this.viewportWidth = Number(area.width);
+      this.viewportHeight = Number(area.height);
+    })
   }
 
   @Builder
@@ -299,7 +305,6 @@ export struct HomePage {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .layoutWeight(1)
-      Blank()
       if (this.forums[this.selectedForumIndex].id === '6') {
         Image($r('app.media.toolbar_filter'))
           .width(42)
@@ -317,7 +322,7 @@ export struct HomePage {
         .fillColor($r('app.color.text_detail'))
         .padding(9)
         .onClick(() => {
-          this.pathStack.pushPathByName('Search', null);
+          this.pushHomeRoute('Search', null);
         })
       Image($r('app.media.toolbar_more'))
         .width(42)
@@ -797,11 +802,13 @@ export struct HomePage {
                 ListItem() {
                   this.buildThreadItem(thread);
                 }
+                .backgroundColor(this.isWideLayout && this.selectedThreadId === thread.id ?
+                  $r('app.color.fill_selected') : $r('app.color.surface'))
                 .onClick(() => {
                   if (this.shouldSuppressThreadOpenAfterDrawerSwipe()) {
                     return;
                   }
-                  this.pathStack.pushPathByName('ThreadDetail',
+                  this.pushHomeRoute('ThreadDetail',
                     createThreadRouteParams(thread.id, thread.title, this.displayReplyCount(thread), 1, 0, thread.forumId));
                 })
               }, (thread: ThreadSummary) => this.threadRowVersions.key(thread))
@@ -981,35 +988,18 @@ export struct HomePage {
         }
         .layoutWeight(1)
 
-        Row({ space: 5 }) {
-          if ((thread.threadType || '').length > 0) {
-            Text(thread.threadType || '')
-              .fontSize(12)
-              .fontColor($r('app.color.text_muted'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .constraintSize({ maxWidth: 92 })
-          }
-          if (thread.hasImage === true) {
-            Image($r('app.media.thread_has_image'))
-              .width(17)
-              .height(17)
-              .objectFit(ImageFit.Contain)
-              .fillColor($r('app.color.brand'))
-          }
-          Text(formatFourD4yThreadCount(this.displayReplyCount(thread)) + '/' +
-            formatFourD4yThreadCount(thread.viewCount || 0))
-            .fontSize(12)
-            .fontColor($r('app.color.text_muted'))
-            .maxLines(1)
-          Text(formatFourD4yThreadCreatedDate(thread.createdAt || ''))
-            .fontSize(12)
-            .fontColor($r('app.color.text_muted'))
-            .maxLines(1)
+        if (this.viewportWidth >= 360 || this.viewportWidth <= 0) {
+          this.buildThreadMetadata(thread);
         }
-        .justifyContent(FlexAlign.End)
       }
       .width('100%')
+
+      if (this.viewportWidth > 0 && this.viewportWidth < 360) {
+        Row() {
+          Blank().layoutWeight(1)
+          this.buildThreadMetadata(thread);
+        }.width('100%')
+      }
 
       Text(thread.title)
         .fontSize(17)
@@ -1023,6 +1013,26 @@ export struct HomePage {
     .alignItems(HorizontalAlign.Start)
     .width('100%')
     .padding({ left: 16, right: 16, top: 9, bottom: 10 })
+  }
+
+  @Builder
+  private buildThreadMetadata(thread: ThreadSummary) {
+    Row({ space: 5 }) {
+      if ((thread.threadType || '').length > 0) {
+        Text(thread.threadType || '').fontSize(12).fontColor($r('app.color.text_muted'))
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .constraintSize({ maxWidth: this.viewportWidth < 300 ? 48 : 92 })
+      }
+      if (thread.hasImage === true) {
+        Image($r('app.media.thread_has_image')).width(17).height(17).objectFit(ImageFit.Contain)
+          .fillColor($r('app.color.brand'))
+      }
+      Text(formatFourD4yThreadCount(this.displayReplyCount(thread)) + '/' +
+        formatFourD4yThreadCount(thread.viewCount || 0))
+        .fontSize(12).fontColor($r('app.color.text_muted')).maxLines(1)
+      Text(formatFourD4yThreadCreatedDate(thread.createdAt || ''))
+        .fontSize(12).fontColor($r('app.color.text_muted')).maxLines(1)
+    }.justifyContent(FlexAlign.End)
   }
 
   @Builder
@@ -1114,7 +1124,7 @@ export struct HomePage {
         .onClick(() => {
           const forum: ForumSummary = this.forums[this.selectedForumIndex];
           const generation: number = this.accountState.getSessionGeneration();
-          this.pathStack.pushPathByName('ForumComposer',
+          this.pushHomeRoute('ForumComposer',
             createNewThreadComposerRouteParams(forum.id, forum.name, this.currentForumThreadTypes),
             (popInfo: PopInfo) => this.onNewThreadComposerReturned(popInfo, forum.id, generation));
         })
@@ -1194,11 +1204,11 @@ export struct HomePage {
           return;
         }
         if (index === 2) {
-          this.pathStack.pushPathByName('Favorites', null);
+          this.pushHomeRoute('Favorites', null);
           return;
         }
         if (index === 3) {
-          this.pathStack.pushPathByName('MyContent', null);
+          this.pushHomeRoute('MyContent', null);
           return;
         }
         this.activeTab = 0;
@@ -1312,18 +1322,31 @@ export struct HomePage {
     this.isMainDrawerOpen = false;
     if (routeName === 'Account') {
       const sessionGeneration: number = this.accountState.getSessionGeneration();
-      this.pathStack.pushPathByName(routeName, routeParam, (_result: PopInfo) => {
+      this.pushHomeRoute(routeName, routeParam, (_result: PopInfo) => {
         this.refreshAfterAccountManagement(sessionGeneration);
       });
       return;
     }
     if (routeName === 'MessageCenter') {
-      this.pathStack.pushPathByName(routeName, routeParam, (_result: PopInfo) => {
+      this.pushHomeRoute(routeName, routeParam, (_result: PopInfo) => {
         void this.refreshLoginState();
       });
       return;
     }
-    this.pathStack.pushPathByName(routeName, routeParam);
+    this.pushHomeRoute(routeName, routeParam);
+  }
+
+  private pushHomeRoute(name: string, param: Object | null, onPop?: Callback<PopInfo>): void {
+    // A left-pane selection replaces the right-pane branch, not a history of
+    // unrelated topics. Nested links in the detail keep their normal Back path.
+    if (this.isWideLayout) {
+      this.pathStack.clear(false);
+    }
+    if (onPop) {
+      this.pathStack.pushPathByName(name, param, onPop);
+    } else {
+      this.pathStack.pushPathByName(name, param);
+    }
   }
 
   private refreshAfterAccountManagement(previousGeneration: number): void {
@@ -1618,7 +1641,7 @@ export struct HomePage {
     // Refresh only after confirmed publication. The editor has already left
     // the stack, so Back from this reader cannot revive a submitted draft.
     this.loadForumPage(1, false);
-    this.pathStack.pushPathByName('ThreadDetail',
+    this.pushHomeRoute('ThreadDetail',
       createThreadRouteParams(result.threadId, result.title, 0, 1, 0, forumId));
   }
 
@@ -2159,14 +2182,14 @@ export struct HomePage {
 
   private openUnreadReminder(): void {
     if (this.privateMessageUnreadCount > 0) {
-      this.pathStack.pushPathByName('MessageCenter',
+      this.pushHomeRoute('MessageCenter',
         createMessageCenterRouteParams(FourD4yMessageMode.PrivateMessages), (_result: PopInfo) => {
           void this.refreshLoginState();
         });
       return;
     }
     if (this.informationReminderUnreadCount > 0) {
-      this.pathStack.pushPathByName('MessageCenter',
+      this.pushHomeRoute('MessageCenter',
         createMessageCenterRouteParams(FourD4yMessageMode.ThreadNotices), (_result: PopInfo) => {
           void this.refreshLoginState();
         });

@@ -40,7 +40,7 @@ interface TaggedAppInfo {
 }
 
 export function isUpdateTag(tag: string): boolean {
-  return typeof tag === 'string' && /^v\d+\.\d+\.\d+(?:\.\d+|-beta\.\d+)?$/.test(tag) && tag.length <= 64;
+  return typeof tag === 'string' && /^v\d+\.\d+\.\d+(?:\.\d+|-beta\.\d+(?:\.\d+)?)?$/.test(tag) && tag.length <= 64;
 }
 
 export function updateVersionUrl(tag: string): string {
