@@ -1,4 +1,5 @@
 import { FOUR_D4Y_QUICK_FORUM_IDS, getFourD4yForums } from '../catalog/FourD4yForumCatalog';
+import { FOUR_D4Y_DEFAULT_SPLIT_PANE_RATIO, normalizeFourD4ySplitPaneRatio } from './FourD4ySplitPane';
 import { FOUR_D4Y_DEFAULT_POST_TAIL_TEXT, FOUR_D4Y_DEFAULT_POST_TAIL_URL, FourD4yPostTailSettings,
   normalizeFourD4yPostTailText, normalizeFourD4yPostTailUrl } from './FourD4yPostTail';
 
@@ -26,6 +27,8 @@ export interface FourD4yUserSettings extends FourD4yPostTailSettings {
   showPinnedThreads: boolean;
   /** Forum IDs whose list requests use the server's `orderby=dateline` mode. */
   postTimeSortForumIds: string[];
+  /** Preferred left-pane fraction, not the automatically clamped window width. */
+  splitPaneRatio: number;
 }
 
 export const FOUR_D4Y_FONT_SCALES: number[] = [0.9, 1, 1.15, 1.3];
@@ -43,6 +46,7 @@ export function createDefaultFourD4yUserSettings(): FourD4yUserSettings {
     quickForumIds: [...FOUR_D4Y_QUICK_FORUM_IDS],
     showPinnedThreads: true,
     postTimeSortForumIds: [],
+    splitPaneRatio: FOUR_D4Y_DEFAULT_SPLIT_PANE_RATIO,
     addPostTail: false,
     postTailText: FOUR_D4Y_DEFAULT_POST_TAIL_TEXT,
     postTailUrl: FOUR_D4Y_DEFAULT_POST_TAIL_URL
@@ -66,6 +70,7 @@ export function parseFourD4yUserSettings(rawValue: string): FourD4yUserSettings 
       quickForumIds: normalizeFourD4yQuickForumIds(value['quickForumIds']),
       showPinnedThreads: normalizeFourD4yShowPinnedThreads(value['showPinnedThreads']),
       postTimeSortForumIds: normalizeFourD4yPostTimeSortForumIds(value['postTimeSortForumIds']),
+      splitPaneRatio: normalizeFourD4ySplitPaneRatio(value['splitPaneRatio']),
       addPostTail: value['addPostTail'] === true,
       postTailText: normalizeFourD4yPostTailText(value['postTailText']),
       postTailUrl: normalizeFourD4yPostTailUrl(value['postTailUrl'])
@@ -89,6 +94,7 @@ export function normalizeFourD4yUserSettings(settings: FourD4yUserSettings): Fou
     quickForumIds: normalizeFourD4yQuickForumIds(settings.quickForumIds),
     showPinnedThreads: normalizeFourD4yShowPinnedThreads(settings.showPinnedThreads),
     postTimeSortForumIds: normalizeFourD4yPostTimeSortForumIds(settings.postTimeSortForumIds),
+    splitPaneRatio: normalizeFourD4ySplitPaneRatio(settings.splitPaneRatio),
     addPostTail: settings.addPostTail === true,
     postTailText: normalizeFourD4yPostTailText(settings.postTailText),
     postTailUrl: normalizeFourD4yPostTailUrl(settings.postTailUrl)
@@ -99,6 +105,7 @@ export function normalizeFourD4yUserSettings(settings: FourD4yUserSettings): Fou
 export function mergeFourD4yUserSettingsChanges(current: FourD4yUserSettings,
   before: FourD4yUserSettings, next: FourD4yUserSettings): FourD4yUserSettings {
   return normalizeFourD4yUserSettings({
+    splitPaneRatio: next.splitPaneRatio !== before.splitPaneRatio ? next.splitPaneRatio : current.splitPaneRatio,
     themeMode: next.themeMode !== before.themeMode ? next.themeMode : current.themeMode,
     fontScale: next.fontScale !== before.fontScale ? next.fontScale : current.fontScale,
     postLineSpacing: next.postLineSpacing !== before.postLineSpacing ? next.postLineSpacing : current.postLineSpacing,

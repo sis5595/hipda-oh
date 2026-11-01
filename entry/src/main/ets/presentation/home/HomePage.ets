@@ -1470,6 +1470,7 @@ export struct HomePage {
       quickForumIds: [...this.drawerSettings.quickForumIds],
       showPinnedThreads: this.drawerSettings.showPinnedThreads,
       postTimeSortForumIds: [...this.drawerSettings.postTimeSortForumIds],
+      splitPaneRatio: this.drawerSettings.splitPaneRatio,
       addPostTail: this.drawerSettings.addPostTail,
       postTailText: this.drawerSettings.postTailText,
       postTailUrl: this.drawerSettings.postTailUrl
@@ -1478,6 +1479,7 @@ export struct HomePage {
 
   private withDrawerPostLineSpacing(postLineSpacing: number): FourD4yUserSettings {
     return {
+      splitPaneRatio: this.drawerSettings.splitPaneRatio,
       themeMode: this.drawerSettings.themeMode,
       fontScale: this.drawerSettings.fontScale,
       postLineSpacing: postLineSpacing,
@@ -1493,6 +1495,7 @@ export struct HomePage {
 
   private withDrawerThemeMode(themeMode: FourD4yThemeMode): FourD4yUserSettings {
     return {
+      splitPaneRatio: this.drawerSettings.splitPaneRatio,
       themeMode: themeMode,
       fontScale: this.drawerSettings.fontScale,
       postLineSpacing: this.drawerSettings.postLineSpacing,
@@ -1508,6 +1511,7 @@ export struct HomePage {
 
   private withForumListSettings(showPinnedThreads: boolean, postTimeSortForumIds: string[]): FourD4yUserSettings {
     return {
+      splitPaneRatio: this.drawerSettings.splitPaneRatio,
       themeMode: this.drawerSettings.themeMode,
       fontScale: this.drawerSettings.fontScale,
       postLineSpacing: this.drawerSettings.postLineSpacing,

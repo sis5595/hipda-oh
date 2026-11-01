@@ -509,6 +509,7 @@ export struct SettingsPage {
       quickForumIds: [...this.settings.quickForumIds],
       showPinnedThreads: this.settings.showPinnedThreads,
       postTimeSortForumIds: [...this.settings.postTimeSortForumIds],
+      splitPaneRatio: this.settings.splitPaneRatio,
       addPostTail: this.settings.addPostTail,
       postTailText: this.settings.postTailText,
       postTailUrl: this.settings.postTailUrl
@@ -517,6 +518,7 @@ export struct SettingsPage {
 
   private withFontScale(fontScale: number): FourD4yUserSettings {
     return {
+      splitPaneRatio: this.settings.splitPaneRatio,
       themeMode: this.settings.themeMode,
       fontScale: fontScale,
       postLineSpacing: this.settings.postLineSpacing,
@@ -532,6 +534,7 @@ export struct SettingsPage {
 
   private withImageLoadPolicy(imageLoadPolicy: FourD4yImageLoadPolicy): FourD4yUserSettings {
     return {
+      splitPaneRatio: this.settings.splitPaneRatio,
       themeMode: this.settings.themeMode,
       fontScale: this.settings.fontScale,
       postLineSpacing: this.settings.postLineSpacing,
@@ -547,6 +550,7 @@ export struct SettingsPage {
 
   private withQuickForumIds(quickForumIds: string[]): FourD4yUserSettings {
     return {
+      splitPaneRatio: this.settings.splitPaneRatio,
       themeMode: this.settings.themeMode,
       fontScale: this.settings.fontScale,
       postLineSpacing: this.settings.postLineSpacing,
@@ -575,6 +579,7 @@ export struct SettingsPage {
 
   private withPostLineSpacing(postLineSpacing: number): FourD4yUserSettings {
     return {
+      splitPaneRatio: this.settings.splitPaneRatio,
       themeMode: this.settings.themeMode,
       fontScale: this.settings.fontScale,
       postLineSpacing: postLineSpacing,

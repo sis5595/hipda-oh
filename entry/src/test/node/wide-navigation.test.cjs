@@ -44,6 +44,7 @@ Object.assign(app, { navigationWidth: 960, activeRouteName: 'ThreadDetail', quic
   loadPrivacyConsent: async () => {}, pathStack: {
     setInterception: value => { interception = value; }, size: () => 1, pop: () => popped++
   } });
+app.restoreSplitPreference = async () => {};
 app.aboutToAppear();
 interception.willShow('navBar', { pathInfo: { name: 'ThreadDetail', param: { threadId: 'synthetic' } } });
 assert.equal(selected.get('hipdaoh_selected_thread_id'), 'synthetic');

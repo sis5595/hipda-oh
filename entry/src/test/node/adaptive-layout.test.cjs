@@ -11,7 +11,8 @@ assert.match(moduleConfig, /"deviceTypes"\s*:\s*\[\s*"phone",\s*"tablet"\s*\]/);
 assert.match(moduleConfig, /"orientation"\s*:\s*"auto_rotation_restricted"/);
 const index = read('ets/pages/Index.ets');
 assert.match(index, /NavigationMode\.Split : NavigationMode\.Stack/);
-assert.match(index, /\.navBarWidth\('40%'\)/);
+assert.match(index, /\.navBarWidth\(this\.splitPaneWidth\(\)\)/);
+assert.match(index, /this\.endSplitDrag\(\)/);
 assert.match(index, /\.splitPlaceholder\(this\.splitEmptyContent\)/);
 assert.equal((index.match(/Navigation\(this\.pathStack\)/g) || []).length, 1,
   'Resizing must not recreate a different navigation tree or its drafts');

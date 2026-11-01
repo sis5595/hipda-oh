@@ -33,6 +33,9 @@ import { FourD4yUnreadState } from '../domain/notice/FourD4yUnreadState';
 import { FourD4yObservedReplyCounts } from '../domain/thread/FourD4yObservedReplyCounts';
 import { FourD4yThreadMutationState } from '../domain/thread/FourD4yThreadMutationState';
 import { FourD4yPrivacyConsentStore } from '../data/local/FourD4yPrivacyConsentStore';
+import { FourD4yUserSettingsStore } from '../data/local/FourD4yUserSettingsStore';
+import { FOUR_D4Y_DEFAULT_SPLIT_PANE_RATIO, FOUR_D4Y_MIN_LIST_WIDTH, FOUR_D4Y_MIN_DETAIL_WIDTH,
+  getFourD4ySplitPaneWidth } from '../domain/settings/FourD4ySplitPane';
 import { FOUR_D4Y_PRIVACY_CONTACT, FOUR_D4Y_PRIVACY_POLICY_UPDATED_AT,
   FOUR_D4Y_PRIVACY_POLICY_SECTIONS, FourD4yPrivacyPolicySection } from '../domain/privacy/FourD4yPrivacyPolicy';
 
@@ -70,6 +73,13 @@ struct Index {
   @State privacyErrorMessage: string = '';
   @State isPolicyDetailVisible: boolean = false;
   @State navigationWidth: number = 0;
+  @State splitPaneRatio: number = FOUR_D4Y_DEFAULT_SPLIT_PANE_RATIO;
+  @State splitPreferenceReady: boolean = false;
+  @State isResizingSplit: boolean = false;
+  private splitDragViewportWidth: number = 0;
+  private splitDragStartWidth: number = 0;
+  private splitDragStartRatio: number = FOUR_D4Y_DEFAULT_SPLIT_PANE_RATIO;
+  private splitSaveSequence: number = 0;
   @State activeRouteName: string = '';
   @StorageLink('hipdaoh_quick_reply_visible') quickReplyVisible: boolean = false;
   @StorageLink('hipdaoh_main_drawer_open') mainDrawerOpen: boolean = false;
@@ -94,6 +104,7 @@ struct Index {
       }
     });
     void this.loadPrivacyConsent();
+    void this.restoreSplitPreference();
   }
 
   aboutToDisappear(): void {
@@ -114,6 +125,94 @@ struct Index {
       return true;
     }
     return false;
+  }
+
+  private async restoreSplitPreference(): Promise<void> {
+    try {
+      const context = this.getUIContext().getHostContext() as common.Context;
+      const settings = await FourD4yUserSettingsStore.load(context);
+      if (this.isIndexAlive) {
+        this.splitPaneRatio = settings.splitPaneRatio;
+      }
+    } catch (_error) {
+      // Default remains usable; a later failed save is reported to the user.
+    }
+    if (this.isIndexAlive) {
+      this.splitPreferenceReady = true;
+    }
+  }
+
+  private splitPaneWidth(): number {
+    return getFourD4ySplitPaneWidth(this.navigationWidth, this.splitPaneRatio);
+  }
+
+  private canResizeSplit(): boolean {
+    return this.isIndexAlive && this.splitPreferenceReady && isFourD4yWideLayout(this.navigationWidth) &&
+      !this.mainDrawerOpen && !this.quickReplyVisible && !isFourD4yFullWidthRoute(this.activeRouteName);
+  }
+
+  private beginSplitDrag(): void {
+    if (!this.canResizeSplit()) {
+      return;
+    }
+    this.splitDragViewportWidth = this.navigationWidth;
+    this.splitDragStartWidth = this.splitPaneWidth();
+    this.splitDragStartRatio = this.splitPaneRatio;
+    this.isResizingSplit = true;
+  }
+
+  private updateSplitDrag(offsetX: number): void {
+    if (!this.isResizingSplit || !Number.isFinite(offsetX)) {
+      return;
+    }
+    if (!this.canResizeSplit() || this.navigationWidth !== this.splitDragViewportWidth) {
+      this.cancelSplitDrag();
+      return;
+    }
+    // Clamp the absolute drag position before normalizing the stored fraction.
+    const width = Math.min(this.navigationWidth - FOUR_D4Y_MIN_DETAIL_WIDTH, Math.max(FOUR_D4Y_MIN_LIST_WIDTH,
+      this.splitDragStartWidth + offsetX));
+    this.splitPaneRatio = width / this.navigationWidth;
+  }
+
+  private endSplitDrag(): void {
+    if (!this.isResizingSplit) {
+      return;
+    }
+    if (!this.canResizeSplit() || this.navigationWidth !== this.splitDragViewportWidth) {
+      this.cancelSplitDrag();
+      return;
+    }
+    this.isResizingSplit = false;
+    if (Math.abs(this.splitPaneWidth() - this.splitDragStartWidth) < 0.5) {
+      // At the narrow limit there is no room to drag. Keep the wider-window
+      // preference instead of saving the automatic 240/360 constraint.
+      this.splitPaneRatio = this.splitDragStartRatio;
+      return;
+    }
+    void this.persistSplitPreference(this.splitPaneRatio);
+  }
+
+  private cancelSplitDrag(): void {
+    if (this.isResizingSplit) {
+      this.isResizingSplit = false;
+      this.splitPaneRatio = this.splitDragStartRatio;
+    }
+  }
+
+  private async persistSplitPreference(ratio: number): Promise<void> {
+    const sequence = ++this.splitSaveSequence;
+    try {
+      const context = this.getUIContext().getHostContext() as common.Context;
+      const saved = await FourD4yUserSettingsStore.saveSplitPaneRatio(context, ratio);
+      if (!saved && this.isIndexAlive && sequence === this.splitSaveSequence) {
+        this.getUIContext().getPromptAction().showToast({ message: '栏宽已调整，但暂未确认保存，请稍后重新调整重试。' });
+      }
+    } catch (_error) {
+      if (this.isIndexAlive && sequence === this.splitSaveSequence) {
+        this.getUIContext().getPromptAction().showToast({ message: '暂时无法保存栏宽，请稍后再试。' });
+      }
+    }
   }
 
   @Builder
@@ -174,9 +273,11 @@ struct Index {
         .mode(isFourD4yWideLayout(this.navigationWidth) &&
           !isFourD4yFullWidthRoute(this.activeRouteName) && !this.quickReplyVisible ?
           NavigationMode.Split : NavigationMode.Stack)
-        .navBarWidth('40%')
-        .navBarWidthRange([240, '45%'])
-        .minContentWidth(360)
+        .navBarWidth(this.splitPaneWidth())
+        // Lock native divider movement to the explicit gesture below, so only
+        // real completed drags become preferences (not resize/fullscreen events).
+        .navBarWidthRange([this.splitPaneWidth(), this.splitPaneWidth()])
+        .minContentWidth(FOUR_D4Y_MIN_DETAIL_WIDTH)
         .enableDragBar(false)
         .splitPlaceholder(this.splitEmptyContent)
         .navDestination(this.routeMap)
@@ -185,14 +286,39 @@ struct Index {
           // This does not recreate the stack, reload a page or touch any drafts.
           AppStorage.setOrCreate<number>('hipdaoh_viewport_width', Number(area.width));
           AppStorage.setOrCreate<number>('hipdaoh_viewport_height', Number(area.height));
-          this.navigationWidth = Number(area.width);
+          if (this.navigationWidth !== Number(area.width)) {
+            this.cancelSplitDrag();
+            this.navigationWidth = Number(area.width);
+          }
           AppStorage.setOrCreate<boolean>('hipdaoh_wide_layout', isFourD4yWideLayout(this.navigationWidth));
         })
+        if (this.canResizeSplit()) {
+          Column() {
+            Blank().layoutWeight(1)
+            Column().width(3).height(40).borderRadius(2)
+              .backgroundColor($r('app.color.text_muted'))
+            Blank().layoutWeight(1)
+          }
+          .width(24).height('100%')
+          .position({ x: Math.max(0, this.splitPaneWidth() - 12), y: 0 })
+          .accessibilityText('拖动调整左右栏宽度')
+          .gesture(PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 3 })
+            .onActionStart((event: GestureEvent) => {
+              this.beginSplitDrag();
+              this.updateSplitDrag(event.offsetX);
+            })
+            .onActionUpdate((event: GestureEvent) => { this.updateSplitDrag(event.offsetX); })
+            .onActionEnd((event: GestureEvent) => {
+              this.updateSplitDrag(event.offsetX);
+              this.endSplitDrag();
+            })
+            .onActionCancel(() => { this.cancelSplitDrag(); }))
+        }
         if (isFourD4yWideLayout(this.navigationWidth) && this.mainDrawerOpen &&
           !isFourD4yFullWidthRoute(this.activeRouteName) && !this.quickReplyVisible) {
           // Home's own scrim covers the left pane. Extend dismissal over the
           // right pane too, without intercepting the actual drawer controls.
-          Column().width('60%').height('100%')
+          Column().width(Math.max(0, this.navigationWidth - this.splitPaneWidth())).height('100%')
             .backgroundColor($r('app.color.overlay_scrim'))
             .onClick(() => { this.mainDrawerOpen = false; })
             .transition(TransitionEffect.OPACITY.animation({ duration: 180, curve: Curve.EaseOut }))

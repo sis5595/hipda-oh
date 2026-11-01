@@ -15,6 +15,7 @@ function load(file, dependencies = {}) {
 }
 const tail = load('domain/settings/FourD4yPostTail');
 const settings = load('domain/settings/FourD4yUserSettings', {
+  './FourD4ySplitPane': load('domain/settings/FourD4ySplitPane'),
   '../catalog/FourD4yForumCatalog': load('domain/catalog/FourD4yForumCatalog'),
   './FourD4yPostTail': tail });
 const defaults = settings.createDefaultFourD4yUserSettings();

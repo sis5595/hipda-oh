@@ -16,7 +16,9 @@ function load(relative, dependencies = {}) {
   return exports;
 }
 const catalog = load('domain/catalog/FourD4yForumCatalog');
+const splitPane = load('domain/settings/FourD4ySplitPane');
 const contracts = load('domain/settings/FourD4yUserSettings', { '../catalog/FourD4yForumCatalog': catalog,
+  './FourD4ySplitPane': splitPane,
   './FourD4yPostTail': load('domain/settings/FourD4yPostTail') });
 const baseline = contracts.createDefaultFourD4yUserSettings();
 let memory = JSON.stringify(baseline), disk = memory, failRead = false, failFlush = false;
@@ -33,7 +35,8 @@ const preferences = {
 const store = load('data/local/FourD4yUserSettingsStore', {
   '@kit.AbilityKit': { ConfigurationConstant: { ColorMode: {} } },
   '@kit.ArkData': { preferences },
-  '../../domain/settings/FourD4yUserSettings': contracts
+  '../../domain/settings/FourD4yUserSettings': contracts,
+  '../../domain/settings/FourD4ySplitPane': splitPane
 }).FourD4yUserSettingsStore;
 (async () => {
   failRead = true;
@@ -79,5 +82,25 @@ const store = load('data/local/FourD4yUserSettingsStore', {
     flushGate = undefined;
     failFlush = false;
   }
-  console.log('User settings field merge, write queue and failure recovery regression passed.');
+  const beforeDrags = JSON.parse(disk);
+  await Promise.all([
+    store.saveSplitPaneRatio({}, 0.55),
+    store.save({}, { ...beforeDrags, themeMode: 'light' }, beforeDrags),
+    store.saveSplitPaneRatio({}, 0.4)
+  ]);
+  assert.equal(JSON.parse(disk).splitPaneRatio, 0.4,
+    'returning to the original default must win over an earlier queued drag');
+  assert.equal(JSON.parse(disk).themeMode, 'light');
+  await store.saveSplitPaneRatio({}, 0.6);
+  await store.save({}, { ...beforeDrags, imageLoadPolicy: 'tap' }, beforeDrags);
+  assert.equal(JSON.parse(disk).splitPaneRatio, 0.6, 'an old settings page must not reset the ratio');
+  assert.equal(JSON.parse(disk).imageLoadPolicy, 'tap');
+  const confirmedSplit = disk;
+  failFlush = true;
+  assert.equal(await store.saveSplitPaneRatio({}, 0.5), undefined);
+  assert.equal(memory, confirmedSplit);
+  assert.equal(disk, confirmedSplit);
+  failFlush = false;
+  assert.equal((await store.load({})).splitPaneRatio, 0.6);
+  console.log('User settings field merge, queued split intent, explicit flush and failure recovery passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

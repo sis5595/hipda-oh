@@ -3,6 +3,7 @@ import { preferences } from '@kit.ArkData';
 import { createDefaultFourD4yUserSettings, FourD4yThemeMode, FourD4yUserSettings,
   parseFourD4yUserSettings, serializeFourD4yUserSettings } from '../../domain/settings/FourD4yUserSettings';
 import { mergeFourD4yUserSettingsChanges, normalizeFourD4yUserSettings } from '../../domain/settings/FourD4yUserSettings';
+import { normalizeFourD4ySplitPaneRatio } from '../../domain/settings/FourD4ySplitPane';
 
 const PREFERENCES_NAME: string = 'four_d4y_user_settings';
 const SETTINGS_KEY: string = 'settings_v1';
@@ -60,6 +61,24 @@ export class FourD4yUserSettingsStore {
       }
       return undefined;
     }
+  }
+
+  /** An explicit single-field intent, even when an earlier queued drag is still flushing. */
+  static async saveSplitPaneRatio(context: common.Context, ratio: number): Promise<FourD4yUserSettings | undefined> {
+    const normalized: number = normalizeFourD4ySplitPaneRatio(ratio);
+    const result: Promise<FourD4yUserSettings | undefined> = FourD4yUserSettingsStore.writeTail.then(async () => {
+      try {
+        const store: preferences.Preferences = await preferences.getPreferences(context, PREFERENCES_NAME);
+        const current: FourD4yUserSettings = parseFourD4yUserSettings(store.getSync(SETTINGS_KEY, '') as string);
+        const next: FourD4yUserSettings = normalizeFourD4yUserSettings(current);
+        next.splitPaneRatio = normalized;
+        return await FourD4yUserSettingsStore.saveChangesLocked(context, next, current);
+      } catch (_error) {
+        return undefined;
+      }
+    });
+    FourD4yUserSettingsStore.writeTail = result.then(() => {}, () => {});
+    return result;
   }
 
   static applyAppearance(applicationContext: common.ApplicationContext,
