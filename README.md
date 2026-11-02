@@ -6,16 +6,16 @@
 
 ## 下载
 
-当前版本：**1.0.0-beta.6**。
+当前版本：**1.0.0-beta.6.1**。
 
 本次更新：
 
-- 改善平板横竖屏下的页面、抽屉和弹窗显示。
-- 优化回复和帖子编辑界面，修复旋转屏幕后按钮可能被键盘遮挡的问题。
-- 修复部分灰底正文被截断、换行丢失的问题。
-- “关于”增加检查更新、下载进度和失败重试。
+- 平板和折叠屏内屏增加左侧列表、右侧正文的双栏布局。
+- 拖动分隔线可调整左右栏宽，并记住比例。
+- 窄窗口自动使用单栏；回复、编辑和查看大图时使用全宽。
+- 调整双栏下的返回、抽屉关闭和页码弹窗。
 
-从 [GitHub Releases](https://github.com/sis5595/hipda-oh/releases/tag/v1.0.0-beta.6) 下载未签名 HAP 安装包 `hipda-oh-1.0.0-beta.6-unsigned.hap`；源码 ZIP 不是安装包。历次更新见[更新记录](CHANGELOG.md)。
+从 [GitHub Releases](https://github.com/sis5595/hipda-oh/releases/tag/v1.0.0-beta.6.1) 下载未签名 HAP 安装包 `hipda-oh-1.0.0-beta.6.1-unsigned.hap`；源码 ZIP 不是安装包。历次更新见[更新记录](CHANGELOG.md)。
 
 当前构建面向 HarmonyOS 6.1.1 及以上的原生鸿蒙设备，不适用于 Android。
 
